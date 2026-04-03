@@ -79,7 +79,7 @@ resource "aws_lambda_permission" "allow_sns_slack" {
 # IAM Role for Slack Lambda
 ###############################################################################
 
-# Define the assume-role policy for Lambda
+# Define the assume-role policy for Lambda execution (only if Slack integration is enabled)
 data "aws_iam_policy_document" "slack_assume" {
   count = var.slack_webhook != "" ? 1 : 0
 
