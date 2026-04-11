@@ -35,3 +35,31 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Lambda build artifacts
+lambda_payload.zip
+slack_lambda.zip
+modules/*/lambda_payload.zip
+modules/*/slack_lambda.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# Drift simulation
+.drift_simulations.json
+response.json
+plan_output.txt
+apply_output.txt
+remediate_plan.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
