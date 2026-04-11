@@ -1,0 +1,188 @@
+###############################################################################
+# auto-remediate.yml
+# Triggered when a drift issue is labeled "auto-remediate" OR manually.
+# Requires human approval (GitHub Environment) before applying.
+# This gate is intentional — auto-applying deletes without review = outages.
+###############################################################################
+
+name: Auto Remediate Drift
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, prod]
+      dry_run:
+        description: "Dry run (plan only, no apply)"
+        required: false
+        default: "true"
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+env:
+  TF_VERSION: "1.7.5"
+  AWS_REGION: "ca-central-1"
+
+# Only trigger on drift issues being labeled
+jobs:
+  ###########################################################################
+  # Guard: only proceed if label is "auto-remediate" on a drift issue
+  ###########################################################################
+  guard:
+    name: Check trigger conditions
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      environment: ${{ steps.check.outputs.environment }}
+
+    steps:
+      - name: Check trigger
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" == "issues" ]; then
+            LABEL="${{ github.event.label.name }}"
+            ISSUE_LABELS='${{ toJson(github.event.issue.labels.*.name) }}'
+
+            if [ "$LABEL" != "auto-remediate" ]; then
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            # Extract environment from issue labels
+            if echo "$ISSUE_LABELS" | grep -q '"prod"'; then
+              ENV="prod"
+            elif echo "$ISSUE_LABELS" | grep -q '"staging"'; then
+              ENV="staging"
+            else
+              ENV="dev"
+            fi
+
+            echo "should_run=true"  >> $GITHUB_OUTPUT
+            echo "environment=$ENV" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=true"  >> $GITHUB_OUTPUT
+            echo "environment=${{ github.event.inputs.environment || 'dev' }}" >> $GITHUB_OUTPUT
+          fi
+
+  ###########################################################################
+  # Job: Human approval gate + Terraform apply
+  ###########################################################################
+  remediate:
+    name: Apply Remediation
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # GitHub Environment with required reviewers — this is the approval gate
+    # Go to: Settings > Environments > create "remediation" environment
+    # Add yourself (or team) as required reviewer
+    environment:
+      name: remediation
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    env:
+      ENVIRONMENT: ${{ needs.guard.outputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: remediation-${{ github.run_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ env.ENVIRONMENT }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
+            -no-color
+
+      - name: Terraform Plan (pre-apply confirmation)
+        run: |
+          terraform plan \
+            -out=remediate.tfplan \
+            -no-color \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="alert_email=${{ secrets.ALERT_EMAIL }}" \
+            -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL }}" \
+            2>&1 | tee remediate_plan.txt
+          echo "## Remediation Plan" >> $GITHUB_STEP_SUMMARY
+          cat remediate_plan.txt >> $GITHUB_STEP_SUMMARY
+
+      - name: Terraform Apply
+        if: github.event.inputs.dry_run != 'true'
+        id: apply
+        run: |
+          terraform apply \
+            -auto-approve \
+            -no-color \
+            remediate.tfplan \
+            2>&1 | tee apply_output.txt
+
+          echo "apply_exit_code=$?" >> $GITHUB_OUTPUT
+          echo "## Apply Output" >> $GITHUB_STEP_SUMMARY
+          cat apply_output.txt >> $GITHUB_STEP_SUMMARY
+
+      - name: Record remediation in DynamoDB
+        if: steps.apply.outputs.apply_exit_code == '0'
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          aws lambda invoke \
+            --function-name "drift-detection-${{ env.ENVIRONMENT }}-drift-parser" \
+            --payload "$(echo "{\"source\": \"remediation\", \"action\": \"remediation_complete\", \"environment\": \"${{ env.ENVIRONMENT }}\", \"run_id\": \"$GITHUB_RUN_ID\", \"remediated_at\": \"$TIMESTAMP\"}" | base64 -w 0)" \
+            --cli-binary-format raw-in-base64-out \
+            --region ${{ env.AWS_REGION }} \
+            /dev/null
+
+      - name: Close drift issue
+        if: github.event_name == 'issues' && steps.apply.outputs.apply_exit_code == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `✅ **Drift remediated successfully.**\n\nTerraform apply completed at ${new Date().toISOString()}\nRun: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: ['drift', 'remediated', '${{ env.ENVIRONMENT }}']
+            });
+
+      - name: Upload remediation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remediation-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          path: |
+            remediate_plan.txt
+            apply_output.txt
+          retention-days: 90
