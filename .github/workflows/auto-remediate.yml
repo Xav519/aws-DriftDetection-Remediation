@@ -22,7 +22,6 @@ on:
         description: "Dry run (plan only, no apply)"
         required: false
         default: "true"
-        type: boolean
 
 permissions:
   contents: read

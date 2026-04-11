@@ -22,7 +22,6 @@ on:
         description: "Send notification even if no drift found"
         required: false
         default: "false"
-        type: boolean
 
 permissions:
   contents: read
