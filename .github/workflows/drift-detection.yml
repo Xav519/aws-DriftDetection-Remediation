@@ -1,16 +1,5 @@
-###############################################################################
-# drift-detection.yml
-# Runs terraform plan, parses drift, fires alerts via Lambda.
-# Triggered on schedule every 6h + manually via workflow_dispatch.
-# Auth: OIDC — zero static credentials stored in GitHub.
-###############################################################################
-
 name: Drift Detection
-
 on:
-  # cron job in comment to limit email notifications during development - uncomment for production use
-  #schedule:
-   # - cron: "0 */6 * * *"   # Every 6 hours
   workflow_dispatch:
     inputs:
       environment:
@@ -19,53 +8,56 @@ on:
         default: "dev"
         type: choice
         options: [dev, staging, prod]
-      notify_on_clean:
-        description: "Send notification even if no drift found"
-        required: false
-        default: "false"
 
 permissions:
   contents: read
-  id-token: write       # Required for OIDC
-  issues: write         # Required to open GitHub Issues on critical drift
+  id-token: write
+  issues: write
   pull-requests: write
 
 env:
   TF_VERSION: "1.7.5"
   AWS_REGION: "us-east-1"
   ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  ###########################################################################
-  # Job 1 — Run terraform plan and detect drift
-  ###########################################################################
   detect:
     name: Detect Drift
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     outputs:
-      drift_detected: ${{ steps.parse.outputs.drift_detected }}
+      drift_detected: ${{ steps.plan.outputs.drift_detected }}
       critical_count: ${{ steps.parse.outputs.critical_count }}
-      drift_summary:  ${{ steps.parse.outputs.drift_summary }}
-
+      drift_summary: ${{ steps.parse.outputs.drift_summary }}
     steps:
+      # -----------------------------------------------------------------
+      # Checkout
+      # -----------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # -----------------------------------------------------------------
+      # AWS Auth (OIDC)
+      # -----------------------------------------------------------------
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: drift-detection-${{ github.run_id }}
 
+      # -----------------------------------------------------------------
+      # Terraform setup
+      # -----------------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      # -----------------------------------------------------------------
+      # Init
+      # -----------------------------------------------------------------
       - name: Terraform Init
         run: |
           terraform init \
@@ -74,11 +66,18 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
             -no-color
-        working-directory: .
+        working-directory: rootTerraformCode
 
+      # -----------------------------------------------------------------
+      # Validate
+      # -----------------------------------------------------------------
       - name: Terraform Validate
         run: terraform validate -no-color
+        working-directory: rootTerraformCode
 
+      # -----------------------------------------------------------------
+      # Plan (drift detection)
+      # -----------------------------------------------------------------
       - name: Terraform Plan (drift detection)
         id: plan
         run: |
@@ -89,120 +88,103 @@ jobs:
             -no-color \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="alert_email=${{ secrets.ALERT_EMAIL }}" \
-            -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL || '' }}" \
             > plan_output.txt 2>&1
-
           PLAN_EXIT_CODE=$?
-
           set -e
+
           echo "plan_exit_code=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
 
           # Exit code semantics:
-          # 0 = no changes (clean)
-          # 1 = error
+          # 0 = no changes (clean state)
+          # 1 = terraform error
           # 2 = drift detected (changes present)
           if [ $PLAN_EXIT_CODE -eq 1 ]; then
-            echo "Terraform plan failed"
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "Terraform plan failed — see plan output below"
             exit 1
+          elif [ $PLAN_EXIT_CODE -eq 2 ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+          else
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
           fi
-        working-directory: .
+        working-directory: rootTerraformCode
 
+      # -----------------------------------------------------------------
+      # Always print plan output so errors are visible in the logs
+      # -----------------------------------------------------------------
+      - name: Show Terraform plan output
+        if: always()
+        run: |
+          echo "===== plan_output.txt ====="
+          cat plan_output.txt || echo "(file not found)"
+        working-directory: rootTerraformCode
+
+      # -----------------------------------------------------------------
+      # Export tfplan as JSON (only if drift detected)
+      # -----------------------------------------------------------------
       - name: Export plan JSON
         if: steps.plan.outputs.plan_exit_code == '2'
-        run: |
-          terraform show -json tfplan > tfplan.json
-          echo "Plan JSON size: $(du -sh tfplan.json | cut -f1)"
-        working-directory: .
+        run: terraform show -json tfplan > tfplan.json
+        working-directory: rootTerraformCode
 
+      # -----------------------------------------------------------------
+      # Invoke Lambda drift parser
+      # -----------------------------------------------------------------
       - name: Parse drift and invoke Lambda
         id: parse
         if: steps.plan.outputs.plan_exit_code == '2'
         run: |
-          # Base64-encode the plan JSON for Lambda payload
           PLAN_B64=$(base64 -w 0 tfplan.json)
 
-          # Invoke drift parser Lambda
-          RESPONSE=$(aws lambda invoke \
+          aws lambda invoke \
             --function-name "drift-detection-${{ env.ENVIRONMENT }}-drift-parser" \
-            --payload "$(echo "{\"plan_json_b64\": \"$PLAN_B64\", \"source\": \"github-actions\", \"run_id\": \"$GITHUB_RUN_ID\"}" | base64 -w 0)" \
+            --payload "{\"plan_json_b64\": \"$PLAN_B64\", \"source\": \"github-actions\", \"run_id\": \"$GITHUB_RUN_ID\"}" \
             --cli-binary-format raw-in-base64-out \
             --region ${{ env.AWS_REGION }} \
-            response.json 2>&1)
+            response.json
 
           cat response.json
 
           DRIFT_COUNT=$(jq '.drift_count // 0' response.json)
           CRITICAL_COUNT=$(jq '.critical_count // 0' response.json)
-          DRIFT_DETECTED=$([ "$DRIFT_COUNT" -gt 0 ] && echo "true" || echo "false")
 
-          echo "drift_detected=$DRIFT_DETECTED"   >> $GITHUB_OUTPUT
-          echo "critical_count=$CRITICAL_COUNT"   >> $GITHUB_OUTPUT
-          echo "drift_count=$DRIFT_COUNT"         >> $GITHUB_OUTPUT
-          echo "drift_summary=Drift: $DRIFT_COUNT resource(s), $CRITICAL_COUNT critical" >> $GITHUB_OUTPUT
+          echo "drift_count=$DRIFT_COUNT"       >> $GITHUB_OUTPUT
+          echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+          echo "drift_summary=Drift: $DRIFT_COUNT resources, $CRITICAL_COUNT critical" >> $GITHUB_OUTPUT
 
-          echo "## Drift Detection Results" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | ${{ env.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Drifted resources | $DRIFT_COUNT |" >> $GITHUB_STEP_SUMMARY
-          echo "| Critical severity | $CRITICAL_COUNT |" >> $GITHUB_STEP_SUMMARY
-        working-directory: .
+          echo "## Drift Detection Results"  >> $GITHUB_STEP_SUMMARY
+          echo "| Drift | Critical |"        >> $GITHUB_STEP_SUMMARY
+          echo "|-------|----------|"        >> $GITHUB_STEP_SUMMARY
+          echo "| $DRIFT_COUNT | $CRITICAL_COUNT |" >> $GITHUB_STEP_SUMMARY
+        working-directory: rootTerraformCode
 
+      # -----------------------------------------------------------------
+      # Clean state summary
+      # -----------------------------------------------------------------
       - name: No drift summary
         if: steps.plan.outputs.plan_exit_code == '0'
         run: |
-          echo "drift_detected=false" >> $GITHUB_OUTPUT
-          echo "critical_count=0"     >> $GITHUB_OUTPUT
-          echo "## Drift Detection Results" >> $GITHUB_STEP_SUMMARY
-          echo ":white_check_mark: **No drift detected.** Infrastructure matches desired state." >> $GITHUB_STEP_SUMMARY
+          echo "## No Drift Detected ✅" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload plan artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan-${{ env.ENVIRONMENT }}-${{ github.run_id }}
-          path: |
-            plan_output.txt
-            tfplan.json
-          retention-days: 30
-
-  ###########################################################################
-  # Job 2 — Open GitHub Issue for critical drift
-  ###########################################################################
+  # -------------------------------------------------------------------
+  # Open GitHub issue on critical drift
+  # -------------------------------------------------------------------
   open-issue:
     name: Open Critical Drift Issue
     needs: detect
     runs-on: ubuntu-latest
-    if: needs.detect.outputs.critical_count > 0
-
+    if: needs.detect.outputs.critical_count != '0' && needs.detect.outputs.critical_count != ''
     steps:
-      - name: Create critical drift issue
+      - name: Create issue
         uses: actions/github-script@v7
         with:
           script: |
-            const title = `🚨 [CRITICAL DRIFT] ${process.env.ENVIRONMENT} — ${new Date().toISOString().split('T')[0]}`;
-            const body = `
-            ## Critical Infrastructure Drift Detected
-
-            **Environment:** \`${{ env.ENVIRONMENT }}\`
-            **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            **Summary:** ${{ needs.detect.outputs.drift_summary }}
-            **Detected at:** ${new Date().toISOString()}
-
-            ### Next steps
-            1. Review the [workflow run artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for the full plan diff
-            2. Verify whether the change was intentional
-            3. If intentional → update the Terraform code and close this issue
-            4. If unauthorized → add label \`auto-remediate\` to trigger automated remediation
-
-            ### Resources affected
-            See the \`terraform-plan-${{ env.ENVIRONMENT }}-${{ github.run_id }}\` artifact for the full JSON diff.
-            `;
-
+            const title = `🚨 CRITICAL DRIFT - ${process.env.ENVIRONMENT}`;
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title,
-              body,
-              labels: ['drift', 'critical', '${{ env.ENVIRONMENT }}'],
+              body: `Critical infrastructure drift detected in **${process.env.ENVIRONMENT}**.\n\nSummary: ${{ needs.detect.outputs.drift_summary }}`,
+              labels: ['drift', 'critical']
             });
