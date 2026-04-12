@@ -63,7 +63,7 @@ module "drift_detection" {
 }
 
 module "dashboard" {
-  source           = "../modules/dashboard-CloudWatch"
+  source           = "../modules/dashboard-Cloudwatch"
   environment      = var.environment
   project          = var.project
   aws_region       = var.aws_region
