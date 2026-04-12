@@ -17,15 +17,6 @@ terraform {
       version = "~> 2.0"
     }
   }
-
-  # Remote state — bootstrapped via modules/state-backend first run
-  backend "s3" {
-    bucket         = "drift-detection-tfstate-850995562550"
-    key            = "prod/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "drift-detection-lock"
-    encrypt        = true
-  }
 }
 
 provider "aws" {
@@ -46,13 +37,13 @@ provider "aws" {
 ###############################################################################
 
 module "monitored_infra" {
-  source      = "./modules/monitored-infra"
+  source      = "../modules/monitored-infra"
   environment = var.environment
   project     = var.project
 }
 
 module "notifications" {
-  source         = "./modules/notifications"
+  source         = "../modules/notifications"
   environment    = var.environment
   project        = var.project
   alert_email    = var.alert_email
@@ -60,7 +51,7 @@ module "notifications" {
 }
 
 module "drift_detection" {
-  source                  = "./modules/drift-detection"
+  source                  = "../modules/drift-detection"
   environment             = var.environment
   project                 = var.project
   aws_region              = var.aws_region
@@ -71,7 +62,7 @@ module "drift_detection" {
 }
 
 module "dashboard" {
-  source           = "./modules/dashboard"
+  source           = "../modules/dashboard"
   environment      = var.environment
   project          = var.project
   aws_region       = var.aws_region
