@@ -8,8 +8,9 @@
 name: Drift Detection
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"   # Every 6 hours
+  # cron job in comment to limit email notifications during development - uncomment for production use
+  #schedule:
+   # - cron: "0 */6 * * *"   # Every 6 hours
   workflow_dispatch:
     inputs:
       environment:
