@@ -60,7 +60,7 @@ Write-Host ""
 Write-Host "Step 1: Bootstrapping remote state infrastructure..." -ForegroundColor Cyan
 
 # Navigate into the state-backend module
-Push-Location "modules\state-backend"
+Push-Location "..\modules\state-backend"
 
 # Write a temporary backend_override.tf that forces a local backend.
 # Equivalent to the bash heredoc: cat > file << EOF ... EOF

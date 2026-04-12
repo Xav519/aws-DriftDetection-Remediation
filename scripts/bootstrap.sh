@@ -25,7 +25,7 @@ echo ""
 # Step 1 - Apply the state-backend module with a LOCAL backend first
 ###############################################################################
 echo "Step 1: Bootstrapping remote state infrastructure..."
-cd modules/state-backend
+cd ../modules/state-backend
 
 cat > backend_override.tf << EOF
 terraform {
