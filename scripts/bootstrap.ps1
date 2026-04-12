@@ -113,7 +113,9 @@ Write-Host "Step 1 complete: S3 bucket and DynamoDB table created." -ForegroundC
 Write-Host ""
 Write-Host "Step 2: Updating backend config in main.tf..." -ForegroundColor Cyan
 
-$mainTfPath = "main.tf"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Resolve-Path "$scriptDir\.."
+$mainTfPath = Join-Path $projectRoot "rootTerraformCode\main.tf"
 
 if (-not (Test-Path $mainTfPath)) {
     Write-Error "main.tf not found. Make sure you're running this from the project root."

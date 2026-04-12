@@ -7,6 +7,8 @@
 ###############################################################################
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REGION="${AWS_REGION:-us-east-1}"
 PROJECT="${PROJECT:-drift-detection}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -25,7 +27,7 @@ echo ""
 # Step 1 - Apply the state-backend module with a LOCAL backend first
 ###############################################################################
 echo "Step 1: Bootstrapping remote state infrastructure..."
-cd ../modules/state-backend
+cd "$PROJECT_ROOT/modules/state-backend"
 
 cat > backend_override.tf << EOF
 terraform {
@@ -48,8 +50,9 @@ cd ../..
 ###############################################################################
 echo ""
 echo "Step 2: Configuring remote backend..."
-sed -i "s/drift-detection-tfstate/${BUCKET_NAME}/" main.tf
-sed -i "s/drift-detection-lock/${DYNAMO_TABLE}/" main.tf
+MAIN_TF="$PROJECT_ROOT/rootTerraformCode/main.tf"
+sed -i "s/drift-detection-tfstate/${BUCKET_NAME}/" "$MAIN_TF"
+sed -i "s/drift-detection-lock/${DYNAMO_TABLE}/" "$MAIN_TF"
 
 ###############################################################################
 # Step 3 - Initialize root module with remote backend
