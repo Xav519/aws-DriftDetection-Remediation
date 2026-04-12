@@ -233,35 +233,22 @@ data "aws_iam_policy_document" "github_actions_permissions" {
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
     resources = ["arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.project}-lock"]
   }
-  # Read-only permissions to inspect infrastructure for drift comparison
-  # Includes tag-listing and describe actions required by terraform plan
+  # Read-only permissions to inspect infrastructure for drift comparison.
+  # Uses broad Get*/List*/Describe* per service so terraform plan never hits
+  # AccessDenied when reading tags, TTL, backups, dashboards, etc.
   statement {
     effect = "Allow"
     actions = [
-      # EC2
-      "ec2:Describe*",
-      # IAM
+      "ec2:Describe*", "ec2:Get*",
       "iam:Get*", "iam:List*",
-      # S3
-      "s3:Get*", "s3:ListBucket",
-      # DynamoDB
-      "dynamodb:DescribeTable",
-      "dynamodb:DescribeContinuousBackups",  # required by terraform plan
-      # Lambda
+      "s3:Get*", "s3:List*",
+      "dynamodb:Describe*", "dynamodb:List*",
       "lambda:Get*", "lambda:List*",
-      # SNS
-      "sns:Get*", "sns:ListTagsForResource", # ListTagsForResource required by terraform plan
-      # CloudWatch
-      "cloudwatch:DescribeAlarms",
-      "cloudwatch:ListTagsForResource",      # required by terraform plan
-      # EventBridge
-      "events:DescribeRule",                 # required by terraform plan
-      "events:ListTargetsByRule",
-      "events:ListTagsForResource",
-      # CloudWatch Logs
-      "logs:DescribeLogGroups",
-      "logs:DescribeLogStreams",
-      "logs:ListTagsLogGroup"
+      "sns:Get*", "sns:List*",
+      "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*",
+      "events:Describe*", "events:Get*", "events:List*",
+      "logs:Describe*", "logs:Get*", "logs:List*",
+      "xray:Get*", "xray:List*"
     ]
     resources = ["*"]
   }
