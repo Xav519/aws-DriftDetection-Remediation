@@ -1,0 +1,16 @@
+###############################################################################
+# terraform.tfvars — fill in your values, never commit to git
+# Copy to terraform.tfvars and add terraform.tfvars to .gitignore
+###############################################################################
+
+aws_region             = "us-east-1"
+environment            = "dev"
+project                = "drift-detection"
+owner                  = "xavier"
+
+alert_email            = "your-email@example.com"
+slack_webhook_url      = ""   # Optional: paste your Slack webhook here
+
+drift_table_name       = "drift-events"
+detection_schedule     = "cron(0 */6 * * ? *)"
+auto_remediate_enabled = false
