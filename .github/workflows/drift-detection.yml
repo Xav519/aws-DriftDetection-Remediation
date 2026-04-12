@@ -84,6 +84,7 @@ jobs:
         run: |
           set +e
           terraform plan \
+            -refresh=true \
             -detailed-exitcode \
             -out=tfplan \
             -no-color \
