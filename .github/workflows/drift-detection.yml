@@ -84,16 +84,17 @@ jobs:
         run: |
           set +e
           terraform plan \
-            -refresh=true \
             -detailed-exitcode \
             -out=tfplan \
             -no-color \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="alert_email=${{ secrets.ALERT_EMAIL }}" \
             -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL }}" \
-            2>&1 | tee plan_output.txt
+            > plan_output.txt 2>&1
 
           PLAN_EXIT_CODE=$?
+
+          set -e
           echo "plan_exit_code=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
 
           # Exit code semantics:
