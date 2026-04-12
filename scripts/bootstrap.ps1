@@ -174,7 +174,7 @@ Write-Host ""
 Write-Host "Step 4: Checking terraform.tfvars..." -ForegroundColor Cyan
 
 $tfvarsPath        = "terraform.tfvars"
-$tfvarsExamplePath = "terraform.tfvars.example"
+$tfvarsExamplePath = "$projectRoot\terraform.tfvars.example"
 
 if (-not (Test-Path $tfvarsPath)) {
     if (Test-Path $tfvarsExamplePath) {
