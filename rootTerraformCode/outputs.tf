@@ -36,3 +36,15 @@ output "monitored_s3_bucket" {
   description = "S3 bucket used for drift simulation"
   value       = module.monitored_infra.s3_bucket_name
 }
+
+output "tf_state_bucket" {
+  value = "drift-detection-tfstate-${data.aws_caller_identity.current.account_id}"
+}
+
+output "tf_lock_table" {
+  value = "drift-detection-lock"
+}
+
+output "alert_email" {
+  value = var.alert_email
+}
