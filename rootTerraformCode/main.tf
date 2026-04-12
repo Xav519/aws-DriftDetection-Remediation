@@ -20,7 +20,7 @@ terraform {
 
   # Remote state — bootstrapped via modules/state-backend first run
   backend "s3" {
-    bucket         = "drift-detection-tfstate"
+    bucket         = "drift-detection-tfstate-850995562550"
     key            = "prod/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "drift-detection-lock"

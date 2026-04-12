@@ -143,8 +143,8 @@ Write-Host "Updated main.tf: bucket = $BUCKET_NAME, table = $DYNAMO_TABLE" -Fore
 Write-Host ""
 Write-Host "Step 3: Initializing root module with remote S3 backend..." -ForegroundColor Cyan
 
-# Pipe "yes" to auto-confirm the state migration prompt
-# Equivalent to bash: terraform init ... <<< "yes"
+Push-Location "$projectRoot\rootTerraformCode"
+
 Write-Output "yes" | terraform init `
     -migrate-state `
     -no-color `
@@ -155,8 +155,11 @@ Write-Output "yes" | terraform init `
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "terraform init with remote backend failed."
+    Pop-Location
     exit 1
 }
+
+Pop-Location
 
 Write-Host "Root module initialized with remote backend." -ForegroundColor Green
 

@@ -59,6 +59,7 @@ sed -i "s/drift-detection-lock/${DYNAMO_TABLE}/" "$MAIN_TF"
 ###############################################################################
 echo ""
 echo "Step 3: Initializing root module with remote backend..."
+cd "$PROJECT_ROOT/rootTerraformCode"
 terraform init \
   -migrate-state \
   -no-color \
