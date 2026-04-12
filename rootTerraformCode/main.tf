@@ -22,7 +22,7 @@ terraform {
   backend "s3" {
     bucket         = "drift-detection-tfstate"
     key            = "prod/terraform.tfstate"
-    region         = "ca-central-1"
+    region         = "us-east-1"
     dynamodb_table = "drift-detection-lock"
     encrypt        = true
   }

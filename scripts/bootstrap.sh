@@ -7,7 +7,7 @@
 ###############################################################################
 set -euo pipefail
 
-REGION="${AWS_REGION:-ca-central-1}"
+REGION="${AWS_REGION:-us-east-1}"
 PROJECT="${PROJECT:-drift-detection}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 BUCKET_NAME="${PROJECT}-tfstate-${ACCOUNT_ID}"

@@ -38,7 +38,7 @@ console = Console()
 SG_ID = os.environ.get("SG_ID", "")
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 IAM_ROLE_NAME = os.environ.get("IAM_ROLE_NAME", "")
-AWS_REGION = os.environ.get("AWS_REGION", "ca-central-1")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 ec2 = boto3.client("ec2", region_name=AWS_REGION)
 s3 = boto3.client("s3", region_name=AWS_REGION)

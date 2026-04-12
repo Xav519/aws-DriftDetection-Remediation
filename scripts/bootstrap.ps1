@@ -24,7 +24,7 @@ $ErrorActionPreference = "Stop"
 ###############################################################################
 
 # Read from env var if set, otherwise use default — equivalent to ${VAR:-default}
-$REGION  = if ($env:AWS_REGION) { $env:AWS_REGION } else { "ca-central-1" }
+$REGION  = if ($env:AWS_REGION) { $env:AWS_REGION } else { "us-east-1" }
 $PROJECT = if ($env:PROJECT)    { $env:PROJECT    } else { "drift-detection" }
 
 # Get your AWS account ID — equivalent to $(aws sts get-caller-identity ...)

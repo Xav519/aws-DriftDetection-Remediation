@@ -25,7 +25,7 @@ from boto3.dynamodb.conditions import Key, Attr
 
 console = Console()
 
-AWS_REGION = os.environ.get("AWS_REGION", "ca-central-1")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 DRIFT_TABLE = os.environ.get("DRIFT_TABLE", "drift-events")
 
 dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
