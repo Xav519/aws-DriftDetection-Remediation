@@ -34,7 +34,7 @@ from rich import box
 
 console = Console()
 
-# Resource IDs — set via env vars or terraform output
+# Resource IDs - set via env vars or terraform output
 SG_ID = os.environ.get("SG_ID", "")
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 IAM_ROLE_NAME = os.environ.get("IAM_ROLE_NAME", "")
@@ -46,7 +46,7 @@ iam = boto3.client("iam")
 
 
 ###############################################################################
-# Scenario 1 — Open SSH to the world on Security Group
+# Scenario 1 - Open SSH to the world on Security Group
 ###############################################################################
 
 def scenario_sg_open_ssh(restore: bool = False) -> None:
@@ -67,7 +67,7 @@ def scenario_sg_open_ssh(restore: bool = False) -> None:
                     "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "SIMULATED DRIFT"}],
                 }],
             )
-            console.print("[green]✓ SSH rule removed — drift restored[/green]")
+            console.print("[green]✓ SSH rule removed - drift restored[/green]")
         except ec2.exceptions.ClientError as e:
             if "InvalidPermission.NotFound" in str(e):
                 console.print("[dim]Rule was already absent[/dim]")
@@ -81,15 +81,15 @@ def scenario_sg_open_ssh(restore: bool = False) -> None:
                 "IpProtocol": "tcp",
                 "FromPort": 22,
                 "ToPort": 22,
-                "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "SIMULATED DRIFT — DELETE ME"}],
+                "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "SIMULATED DRIFT - DELETE ME"}],
             }],
         )
-        console.print("[red]✓ Drift injected: SSH open to internet — detection should fire within 6h[/red]")
+        console.print("[red]✓ Drift injected: SSH open to internet - detection should fire within 6h[/red]")
         _log_drift_injection("sg_open_ssh", SG_ID, "CRITICAL")
 
 
 ###############################################################################
-# Scenario 2 — Disable S3 encryption
+# Scenario 2 - Disable S3 encryption
 ###############################################################################
 
 def scenario_s3_disable_encryption(restore: bool = False) -> None:
@@ -115,7 +115,7 @@ def scenario_s3_disable_encryption(restore: bool = False) -> None:
 
 
 ###############################################################################
-# Scenario 3 — Disable S3 public access block
+# Scenario 3 - Disable S3 public access block
 ###############################################################################
 
 def scenario_s3_public_access(restore: bool = False) -> None:
@@ -152,7 +152,7 @@ def scenario_s3_public_access(restore: bool = False) -> None:
 
 
 ###############################################################################
-# Scenario 4 — IAM privilege escalation (attach AdministratorAccess)
+# Scenario 4 - IAM privilege escalation (attach AdministratorAccess)
 ###############################################################################
 
 def scenario_iam_escalate_privileges(restore: bool = False) -> None:
@@ -188,7 +188,7 @@ def _log_drift_injection(scenario: str, resource: str, severity: str) -> None:
         "scenario": scenario,
         "resource": resource,
         "severity": severity,
-        "note": "Simulated drift — run --restore to undo",
+        "note": "Simulated drift - run --restore to undo",
     }
     log_file = ".drift_simulations.json"
     existing = []
@@ -221,7 +221,7 @@ def _print_status_table() -> None:
                 for p in sg.get("IpPermissions", [])
                 if p.get("FromPort") == 22
             )
-            status = "[red]DRIFTED — SSH open[/red]" if ssh_open else "[green]Clean[/green]"
+            status = "[red]DRIFTED - SSH open[/red]" if ssh_open else "[green]Clean[/green]"
             table.add_row(SG_ID, "Security Group", status)
         except Exception as e:
             table.add_row(SG_ID, "Security Group", f"[yellow]Error: {e}[/yellow]")
@@ -233,7 +233,7 @@ def _print_status_table() -> None:
             table.add_row(S3_BUCKET, "S3 Encryption", "[green]Enabled[/green]")
         except s3.exceptions.ClientError as e:
             if "ServerSideEncryptionConfigurationNotFoundError" in str(e):
-                table.add_row(S3_BUCKET, "S3 Encryption", "[red]DRIFTED — Disabled[/red]")
+                table.add_row(S3_BUCKET, "S3 Encryption", "[red]DRIFTED - Disabled[/red]")
             else:
                 table.add_row(S3_BUCKET, "S3 Encryption", f"[yellow]Error[/yellow]")
 
@@ -242,7 +242,7 @@ def _print_status_table() -> None:
         try:
             policies = iam.list_attached_role_policies(RoleName=IAM_ROLE_NAME)["AttachedPolicies"]
             admin_attached = any(p["PolicyName"] == "AdministratorAccess" for p in policies)
-            status = "[red]DRIFTED — AdministratorAccess attached[/red]" if admin_attached else "[green]Clean[/green]"
+            status = "[red]DRIFTED - AdministratorAccess attached[/red]" if admin_attached else "[green]Clean[/green]"
             table.add_row(IAM_ROLE_NAME, "IAM Role", status)
         except Exception as e:
             table.add_row(IAM_ROLE_NAME, "IAM Role", f"[yellow]Error: {e}[/yellow]")
