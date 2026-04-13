@@ -2,10 +2,10 @@
 Drift Detection Lambda Handler
 ================================
 Receives either:
-  - A Terraform plan JSON (base64-encoded) passed directly from GitHub Actions
+  - A Terraform plan JSON uploaded to S3 by GitHub Actions (s3_bucket + s3_key)
+  - A Terraform plan JSON (base64-encoded) passed directly (legacy fallback)
   - An EventBridge scheduled trigger (runs a lightweight classification of
     the latest plan stored in S3)
-
 Responsibilities:
   1. Parse terraform show -json output
   2. Classify each resource change by severity
@@ -14,7 +14,6 @@ Responsibilities:
   5. Emit CloudWatch custom metrics
   6. Create structured log entries for CloudWatch Insights queries
 """
-
 import json
 import os
 import base64
@@ -22,7 +21,6 @@ import logging
 import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Any
-
 import boto3
 from botocore.exceptions import ClientError
 
@@ -33,6 +31,7 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource("dynamodb")
 sns_client = boto3.client("sns")
 cloudwatch = boto3.client("cloudwatch")
+s3_client = boto3.client("s3")
 
 # Environment config
 DRIFT_TABLE_NAME = os.environ["DRIFT_TABLE_NAME"]
@@ -71,22 +70,18 @@ def lambda_handler(event: dict, context: Any) -> dict:
     """Entry point — handles both direct invocation and EventBridge scheduled triggers."""
     logger.info("Drift parser invoked. Event source: %s", event.get("source", "direct"))
 
-    # Accept plan JSON passed directly (base64) or embedded in event
     plan_json = _extract_plan(event)
-
     if not plan_json:
         logger.info("No plan data in event — nothing to parse (scheduled ping or test)")
         return {"statusCode": 200, "body": "no_plan_data"}
 
     drift_events = parse_plan(plan_json)
-
     if not drift_events:
         logger.info("No drift detected. Infrastructure matches desired state.")
         _emit_metric("DriftEventsTotal", 0)
         return {"statusCode": 200, "body": "no_drift", "drift_count": 0}
 
     logger.info("Drift detected. %d resource(s) out of state.", len(drift_events))
-
     written = write_drift_events(drift_events)
     publish_alert(drift_events)
     emit_metrics(drift_events)
@@ -101,8 +96,32 @@ def lambda_handler(event: dict, context: Any) -> dict:
 
 
 def _extract_plan(event: dict) -> dict | None:
-    """Extract terraform plan JSON from event payload."""
-    # Direct base64-encoded plan from GitHub Actions
+    """
+    Extract terraform plan JSON from event payload.
+    Priority order:
+      1. S3 reference (s3_bucket + s3_key) — used by GitHub Actions to avoid
+         OS argument length limits when the plan JSON is large
+      2. Inline base64 (plan_json_b64) — legacy fallback
+      3. Raw embedded JSON (plan_json)
+      4. Scheduled trigger — returns None
+    """
+    # 1. S3 reference — fetch plan from S3
+    if "s3_bucket" in event and "s3_key" in event:
+        try:
+            logger.info(
+                "Fetching plan from S3: s3://%s/%s",
+                event["s3_bucket"], event["s3_key"]
+            )
+            obj = s3_client.get_object(
+                Bucket=event["s3_bucket"],
+                Key=event["s3_key"]
+            )
+            return json.loads(obj["Body"].read().decode("utf-8"))
+        except Exception as e:
+            logger.error("Failed to fetch plan from S3: %s", e)
+            return None
+
+    # 2. Inline base64-encoded plan (legacy)
     if "plan_json_b64" in event:
         try:
             decoded = base64.b64decode(event["plan_json_b64"]).decode("utf-8")
@@ -111,11 +130,11 @@ def _extract_plan(event: dict) -> dict | None:
             logger.error("Failed to decode plan_json_b64: %s", e)
             return None
 
-    # Raw plan JSON embedded directly
+    # 3. Raw plan JSON embedded directly
     if "plan_json" in event:
         return event["plan_json"]
 
-    # Scheduled trigger — no plan attached
+    # 4. Scheduled trigger — no plan attached
     return None
 
 
@@ -129,8 +148,6 @@ def parse_plan(plan: dict) -> list[dict]:
 
     for change in resource_changes:
         actions = change.get("change", {}).get("actions", [])
-
-        # Skip no-op resources
         if actions == ["no-op"] or not actions:
             continue
 
@@ -138,7 +155,6 @@ def parse_plan(plan: dict) -> list[dict]:
         resource_type = change.get("type", "")
         change_before = change.get("change", {}).get("before") or {}
         change_after = change.get("change", {}).get("after") or {}
-
         changed_attrs = _diff_attributes(change_before, change_after)
         severity = _classify_severity(resource_type, changed_attrs)
         change_type = _classify_change_type(actions)
@@ -154,13 +170,11 @@ def parse_plan(plan: dict) -> list[dict]:
             "plan_hash": _hash_change(change),
         }
 
-        # Structured log entry for CloudWatch Insights
         logger.info(
             "DRIFT_EVENT resource_address=%s severity=%s change_type=%s resource_type=%s",
             resource_address, severity, change_type, resource_type,
             extra={"json_fields": event},
         )
-
         drift_events.append(event)
 
     return drift_events
@@ -170,13 +184,11 @@ def _diff_attributes(before: dict, after: dict) -> dict:
     """Return only the attributes that changed between before and after."""
     changed = {}
     all_keys = set(before.keys()) | set(after.keys())
-
     for key in all_keys:
         v_before = before.get(key)
         v_after = after.get(key)
         if v_before != v_after:
             changed[key] = {"before": v_before, "after": v_after}
-
     return changed
 
 
@@ -186,14 +198,11 @@ def _classify_severity(resource_type: str, changed_attrs: dict) -> str:
     Rules are evaluated top-to-bottom; first match wins.
     """
     attr_names = list(changed_attrs.keys())
-
     for type_prefix, attr_pattern, severity in SEVERITY_RULES:
         type_match = not type_prefix or resource_type.startswith(type_prefix)
         attr_match = not attr_pattern or any(attr_pattern in a for a in attr_names)
-
         if type_match and attr_match:
             return severity
-
     return "MEDIUM"
 
 
@@ -227,7 +236,6 @@ def write_drift_events(events: list[dict]) -> int:
                     "expires_at": expires_at,
                     "changed_attributes": json.dumps(event["changed_attributes"]),
                 },
-                # Avoid overwriting if an identical event already exists
                 ConditionExpression="attribute_not_exists(resource_address) OR #da <> :da",
                 ExpressionAttributeNames={"#da": "detected_at"},
                 ExpressionAttributeValues={":da": event["detected_at"]},
@@ -251,7 +259,6 @@ def publish_alert(events: list[dict]) -> None:
     def _publish(event_list: list[dict], subject_prefix: str) -> None:
         if not event_list:
             return
-
         summary = {
             "severity_summary": _count_by_severity(event_list),
             "total_drifted_resources": len(event_list),
@@ -264,10 +271,9 @@ def publish_alert(events: list[dict]) -> None:
                     "change_type": e["change_type"],
                     "details": e["changed_attributes"],
                 }
-                for e in event_list[:10]  # Cap at 10 for SNS size limit
+                for e in event_list[:10]
             ],
         }
-
         sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
             Subject=f"[{subject_prefix}] {ENVIRONMENT.upper()} — {len(event_list)} resource(s) drifted",
@@ -291,13 +297,12 @@ def emit_metrics(events: list[dict]) -> None:
     dims = [{"Name": "Environment", "Value": ENVIRONMENT}]
 
     metric_data = [
-        {"MetricName": "DriftEventsTotal",    "Value": len(events),                    "Unit": "Count", "Dimensions": dims},
-        {"MetricName": "CriticalDriftCount",  "Value": counts.get("CRITICAL", 0),      "Unit": "Count", "Dimensions": dims},
-        {"MetricName": "HighDriftCount",      "Value": counts.get("HIGH", 0),          "Unit": "Count", "Dimensions": dims},
-        {"MetricName": "MediumDriftCount",    "Value": counts.get("MEDIUM", 0),        "Unit": "Count", "Dimensions": dims},
-        {"MetricName": "LowDriftCount",       "Value": counts.get("LOW", 0),           "Unit": "Count", "Dimensions": dims},
+        {"MetricName": "DriftEventsTotal",   "Value": len(events),               "Unit": "Count", "Dimensions": dims},
+        {"MetricName": "CriticalDriftCount", "Value": counts.get("CRITICAL", 0), "Unit": "Count", "Dimensions": dims},
+        {"MetricName": "HighDriftCount",     "Value": counts.get("HIGH", 0),     "Unit": "Count", "Dimensions": dims},
+        {"MetricName": "MediumDriftCount",   "Value": counts.get("MEDIUM", 0),   "Unit": "Count", "Dimensions": dims},
+        {"MetricName": "LowDriftCount",      "Value": counts.get("LOW", 0),      "Unit": "Count", "Dimensions": dims},
     ]
-
     cloudwatch.put_metric_data(Namespace=namespace, MetricData=metric_data)
     logger.info("Published %d custom metrics to CloudWatch", len(metric_data))
 
