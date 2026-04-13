@@ -69,4 +69,5 @@ module "dashboard" {
   aws_region       = var.aws_region
   drift_table_name = var.drift_table_name
   lambda_name      = module.drift_detection.lambda_function_name
+  sns_topic_arn = module.notifications.sns_topic_arn
 }
