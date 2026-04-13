@@ -64,7 +64,7 @@ def scenario_sg_open_ssh(restore: bool = False) -> None:
                     "IpProtocol": "tcp",
                     "FromPort": 22,
                     "ToPort": 22,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "SIMULATED DRIFT"}],
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
                 }],
             )
             console.print("[green]✓ SSH rule removed - drift restored[/green]")
