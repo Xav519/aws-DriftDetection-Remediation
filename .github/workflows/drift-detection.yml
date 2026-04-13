@@ -135,11 +135,13 @@ jobs:
         id: parse
         if: steps.plan.outputs.plan_exit_code == '2'
         run: |
-          PLAN_B64=$(base64 -w 0 tfplan.json)
+          # Upload plan to S3 — avoids OS arg length limit for large plans
+          S3_KEY="drift-plans/${{ env.ENVIRONMENT }}/$GITHUB_RUN_ID/tfplan.json"
+          aws s3 cp tfplan.json "s3://${{ secrets.TF_STATE_BUCKET }}/$S3_KEY" --region ${{ env.AWS_REGION }}
 
           aws lambda invoke \
             --function-name "drift-detection-${{ env.ENVIRONMENT }}-drift-parser" \
-            --payload "{\"plan_json_b64\": \"$PLAN_B64\", \"source\": \"github-actions\", \"run_id\": \"$GITHUB_RUN_ID\"}" \
+            --payload "{\"s3_bucket\": \"${{ secrets.TF_STATE_BUCKET }}\", \"s3_key\": \"$S3_KEY\", \"source\": \"github-actions\", \"run_id\": \"$GITHUB_RUN_ID\"}" \
             --cli-binary-format raw-in-base64-out \
             --region ${{ env.AWS_REGION }} \
             response.json
@@ -148,11 +150,9 @@ jobs:
 
           DRIFT_COUNT=$(jq '.drift_count // 0' response.json)
           CRITICAL_COUNT=$(jq '.critical_count // 0' response.json)
-
           echo "drift_count=$DRIFT_COUNT"       >> $GITHUB_OUTPUT
           echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
           echo "drift_summary=Drift: $DRIFT_COUNT resources, $CRITICAL_COUNT critical" >> $GITHUB_OUTPUT
-
           echo "## Drift Detection Results"  >> $GITHUB_STEP_SUMMARY
           echo "| Drift | Critical |"        >> $GITHUB_STEP_SUMMARY
           echo "|-------|----------|"        >> $GITHUB_STEP_SUMMARY
