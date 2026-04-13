@@ -180,15 +180,23 @@ def parse_plan(plan: dict) -> list[dict]:
     return drift_events
 
 
+def _normalize(v):
+    if v in ("", [], {}, None):
+        return None
+    return v
+
+
 def _diff_attributes(before: dict, after: dict) -> dict:
-    """Return only the attributes that changed between before and after."""
     changed = {}
     all_keys = set(before.keys()) | set(after.keys())
+
     for key in all_keys:
-        v_before = before.get(key)
-        v_after = after.get(key)
+        v_before = _normalize(before.get(key))
+        v_after = _normalize(after.get(key))
+
         if v_before != v_after:
             changed[key] = {"before": v_before, "after": v_after}
+
     return changed
 
 
