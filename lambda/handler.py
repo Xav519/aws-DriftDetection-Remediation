@@ -181,8 +181,17 @@ def parse_plan(plan: dict) -> list[dict]:
 
 
 def _normalize(v):
-    if v in ("", [], {}, None):
+    if v in ("", None, {}, []):
         return None
+
+    if isinstance(v, list):
+        cleaned = [_normalize(i) for i in v]
+        cleaned = [i for i in cleaned if i is not None]
+        return cleaned or None
+
+    if isinstance(v, dict):
+        return {k: _normalize(val) for k, val in v.items()}
+
     return v
 
 
@@ -193,6 +202,12 @@ def _diff_attributes(before: dict, after: dict) -> dict:
     for key in all_keys:
         v_before = _normalize(before.get(key))
         v_after = _normalize(after.get(key))
+
+        # extra safety: treat empty lists as equal
+        if v_before == []:
+            v_before = None
+        if v_after == []:
+            v_after = None
 
         if v_before != v_after:
             changed[key] = {"before": v_before, "after": v_after}

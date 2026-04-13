@@ -41,6 +41,7 @@ lambda_payload.zip
 slack_lambda.zip
 modules/*/lambda_payload.zip
 modules/*/slack_lambda.zip
+*.zip
 
 # Python
 __pycache__/

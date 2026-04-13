@@ -55,7 +55,7 @@ resource "aws_dynamodb_table" "drift_events" {
 data "archive_file" "lambda_zip" {
   type        = "zip"
   source_dir  = "${path.root}/../lambda"
-  output_path = "${path.module}/../lambda_payload.zip"
+  output_path = "${path.root}/lambda_payload.zip"
 }
 resource "aws_lambda_function" "drift_parser" {
   function_name    = "${var.project}-${var.environment}-drift-parser"
@@ -275,6 +275,7 @@ data "aws_iam_policy_document" "github_actions_permissions" {
   }
 }
 resource "aws_iam_role_policy" "github_actions_permissions" {
+  name   = "github-actions-permissions"
   role   = aws_iam_role.github_actions.id
   policy = data.aws_iam_policy_document.github_actions_permissions.json
 }
