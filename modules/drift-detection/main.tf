@@ -75,6 +75,9 @@ resource "aws_lambda_function" "drift_parser" {
   tracing_config {
     mode = "Active" # Enables AWS X-Ray for debugging performance bottlenecks
   }
+  lifecycle {
+    ignore_changes = [source_code_hash, last_modified, filename]
+  }
   tags = {
     Name = "${var.project}-drift-parser"
   }
@@ -273,6 +276,9 @@ resource "aws_iam_role_policy" "github_actions_permissions" {
   name   = "github-actions-permissions"
   role   = aws_iam_role.github_actions.id
   policy = data.aws_iam_policy_document.github_actions_permissions.json
+  lifecycle {
+    ignore_changes = [policy]
+  }
 }
 ###############################################################################
 # Remediation Policy
