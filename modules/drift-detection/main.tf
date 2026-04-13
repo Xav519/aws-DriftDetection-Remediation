@@ -144,6 +144,12 @@ data "aws_iam_policy_document" "lambda_permissions" {
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/*"]
   }
+  # Read plan JSON uploaded by GitHub Actions to S3
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["arn:aws:s3:::${var.project}-tfstate-${data.aws_caller_identity.current.account_id}/drift-plans/*"]
+  }
   # Read/Write to its own DynamoDB log table
   statement {
     effect  = "Allow"
