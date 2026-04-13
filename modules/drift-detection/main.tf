@@ -51,12 +51,7 @@ resource "aws_dynamodb_table" "drift_events" {
 # This function processes raw Terraform JSON and decides if the drift is 
 # dangerous (e.g., an open security group) or minor (e.g., a tag change).
 ###############################################################################
-# Packages the Python code located in the /lambda folder into a ZIP for deployment
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_dir  = "${path.root}/../lambda"
-  output_path = "${path.root}/lambda_payload.zip"
-}
+
 resource "aws_lambda_function" "drift_parser" {
   function_name    = "${var.project}-${var.environment}-drift-parser"
   description      = "Parses terraform plan JSON, classifies severity, writes to DynamoDB"

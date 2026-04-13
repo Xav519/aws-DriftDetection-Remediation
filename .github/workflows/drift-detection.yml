@@ -37,6 +37,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Build Lambda zip
+        run: zip -r lambda_payload.zip lambda/
+
       # -----------------------------------------------------------------
       # AWS Auth (OIDC)
       # -----------------------------------------------------------------
