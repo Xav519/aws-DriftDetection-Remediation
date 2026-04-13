@@ -21,4 +21,8 @@ variable "lambda_name"      {
 variable "sns_topic_arn"    {
   type    = string
   default = ""
+  validation {
+    condition     = length(var.sns_topic_arn) > 0
+    error_message = "sns_topic_arn cannot be empty"
+  }
 }

@@ -149,8 +149,8 @@ resource "aws_cloudwatch_metric_alarm" "critical_drift" {
   }
 
   # Notify via SNS (both alarm and recovery)
-  alarm_actions = [var.sns_topic_arn]
-  ok_actions    = [var.sns_topic_arn]
+  alarm_actions = var.sns_topic_arn != null ? [var.sns_topic_arn] : []
+  ok_actions    = var.sns_topic_arn != null ? [var.sns_topic_arn] : []
 }
 
 
@@ -175,5 +175,5 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
     FunctionName = var.lambda_name
   }
 
-  alarm_actions = [var.sns_topic_arn]
+  alarm_actions = var.sns_topic_arn != null ? [var.sns_topic_arn] : []
 }
