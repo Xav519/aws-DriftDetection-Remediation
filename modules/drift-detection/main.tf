@@ -60,8 +60,8 @@ data "archive_file" "lambda_zip" {
 resource "aws_lambda_function" "drift_parser" {
   function_name    = "${var.project}-${var.environment}-drift-parser"
   description      = "Parses terraform plan JSON, classifies severity, writes to DynamoDB"
-  filename         = data.archive_file.lambda_zip.output_path
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  filename         = "${path.root}/../lambda_payload.zip"
+  source_code_hash = filebase64sha256("${path.root}/../lambda_payload.zip")
   handler          = "handler.lambda_handler" # Entry point in your Python script
   runtime          = "python3.12"
   timeout          = 300
