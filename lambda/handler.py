@@ -138,6 +138,14 @@ def _extract_plan(event: dict) -> dict | None:
     return None
 
 
+# Resources that are part of the drift-detection system itself
+# are excluded to prevent self-referential false positives
+EXCLUDED_RESOURCES = {
+    "module.drift_detection.aws_lambda_function.drift_parser",
+    "module.drift_detection.aws_iam_role_policy.github_actions_permissions",
+    "module.drift_detection.data.aws_iam_policy_document.github_actions_permissions",
+}
+
 def parse_plan(plan: dict) -> list[dict]:
     """
     Parse terraform show -json output and return a list of drift events.
