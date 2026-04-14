@@ -76,7 +76,7 @@ resource "aws_lambda_function" "drift_parser" {
     mode = "Active" # Enables AWS X-Ray for debugging performance bottlenecks
   }
   lifecycle {
-    ignore_changes = [source_code_hash, last_modified, filename]
+    ignore_changes = [source_code_hash, filename]
   }
   tags = {
     Name = "${var.project}-drift-parser"
