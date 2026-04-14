@@ -286,7 +286,6 @@ resource "aws_iam_role_policy" "github_actions_permissions" {
 # to "fix" (terraform apply) changes to security groups, S3, and IAM.
 ###############################################################################
 resource "aws_iam_role_policy" "github_actions_remediate" {
-  count = var.auto_remediate_enabled ? 1 : 0 # Only creates this if the variable is 'true'
   name = "github-actions-remediate"
   role = aws_iam_role.github_actions.id
   policy = jsonencode({
@@ -295,12 +294,20 @@ resource "aws_iam_role_policy" "github_actions_remediate" {
       {
         Effect = "Allow"
         Action = [
-          "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
-          "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress",
-          "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
-          "s3:PutBucketEncryption", "s3:PutBucketPublicAccessBlock",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:AuthorizeSecurityGroupEgress",
+          "ec2:RevokeSecurityGroupEgress",
+          "ec2:CreateSecurityGroup",
+          "ec2:DeleteSecurityGroup",
+          "s3:PutBucketEncryption",
+          "s3:PutEncryptionConfiguration", 
+          "s3:PutBucketPublicAccessBlock",
           "s3:PutBucketVersioning",
-          "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy"
+          "iam:UpdateAssumeRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:AttachRolePolicy"
         ]
         Resource = "*"
       }
