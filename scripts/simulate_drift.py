@@ -109,8 +109,17 @@ def scenario_s3_disable_encryption(restore: bool = False) -> None:
         console.print("[green]✓ S3 encryption restored[/green]")
     else:
         console.print(f"[bold red]INJECTING DRIFT: Removing S3 encryption from {S3_BUCKET}[/bold red]")
-        s3.delete_bucket_encryption(Bucket=S3_BUCKET)
-        console.print("[red]✓ Drift injected: S3 bucket encryption disabled[/red]")
+        # AWS re-applies default encryption when deleted, so we change the algorithm
+        # to aws:kms instead - this is detectable by Terraform as a real config change
+        s3.put_bucket_encryption(
+            Bucket=S3_BUCKET,
+            ServerSideEncryptionConfiguration={
+                "Rules": [{"ApplyServerSideEncryptionByDefault": {
+                    "SSEAlgorithm": "aws:kms"
+                }}]
+            },
+        )
+        console.print("[red]✓ Drift injected: S3 encryption changed from AES256 to aws:kms[/red]")
         _log_drift_injection("s3_disable_encryption", S3_BUCKET, "CRITICAL")
 
 
