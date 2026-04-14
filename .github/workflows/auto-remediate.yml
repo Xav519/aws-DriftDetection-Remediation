@@ -153,8 +153,16 @@ jobs:
       # -----------------------------------------------------------------
       # Apply — skipped if dry_run=true (default)
       # -----------------------------------------------------------------
+      - name: Decide if apply should run
+        id: decision
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "apply=false" >> $GITHUB_OUTPUT
+          else
+            echo "apply=true" >> $GITHUB_OUTPUT
+          fi
       - name: Terraform Apply
-        if: github.event.inputs.dry_run != 'true'
+        if: steps.decision.outputs.apply == 'true'
         id: apply
         run: |
           set +e
@@ -165,8 +173,6 @@ jobs:
             2>&1 | tee apply_output.txt
           APPLY_EXIT=$?
           echo "apply_exit_code=$APPLY_EXIT" >> $GITHUB_OUTPUT
-          echo "## Apply Output" >> $GITHUB_STEP_SUMMARY
-          cat apply_output.txt >> $GITHUB_STEP_SUMMARY
           exit $APPLY_EXIT
         working-directory: rootTerraformCode
 
