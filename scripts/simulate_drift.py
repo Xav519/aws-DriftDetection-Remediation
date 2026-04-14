@@ -7,7 +7,7 @@ Each scenario is a standalone function you can run independently.
 
 Usage:
     python simulate_drift.py --scenario sg_open_ssh
-    python simulate_drift.py --scenario s3_disable_encryption
+    python simulate_drift.py --scenario s3_change_encryption
     python simulate_drift.py --scenario iam_escalate_privileges
     python simulate_drift.py --scenario all
     python simulate_drift.py --restore   # Undo all simulated drift
@@ -92,8 +92,8 @@ def scenario_sg_open_ssh(restore: bool = False) -> None:
 # Scenario 2 - Disable S3 encryption
 ###############################################################################
 
-def scenario_s3_disable_encryption(restore: bool = False) -> None:
-    """Remove/restore server-side encryption on the monitored S3 bucket."""
+def scenario_s3_change_encryption(restore: bool = False) -> None:
+    """Change S3 encryption from AES256 to aws:kms to simulate config drift."""
     if not S3_BUCKET:
         console.print("[red]S3_BUCKET env var not set. Run: export S3_BUCKET=$(terraform output -raw monitored_s3_bucket)[/red]")
         sys.exit(1)
@@ -120,7 +120,7 @@ def scenario_s3_disable_encryption(restore: bool = False) -> None:
             },
         )
         console.print("[red]✓ Drift injected: S3 encryption changed from AES256 to aws:kms[/red]")
-        _log_drift_injection("s3_disable_encryption", S3_BUCKET, "CRITICAL")
+        _log_drift_injection("s3_change_encryption", S3_BUCKET, "CRITICAL")
 
 
 ###############################################################################
@@ -265,7 +265,7 @@ def _print_status_table() -> None:
 
 SCENARIOS = {
     "sg_open_ssh":              scenario_sg_open_ssh,
-    "s3_disable_encryption":    scenario_s3_disable_encryption,
+    "s3_change_encryption":     scenario_s3_change_encryption,
     "s3_public_access":         scenario_s3_public_access,
     "iam_escalate_privileges":  scenario_iam_escalate_privileges,
 }
