@@ -48,3 +48,8 @@ output "tf_lock_table" {
 output "alert_email" {
   value = var.alert_email
 }
+
+output "monitored_iam_role_name" {
+  description = "The name of the monitored IAM role"
+  value       = aws_iam_role.monitored_role.name
+}
