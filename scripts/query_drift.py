@@ -57,10 +57,22 @@ def query_drift_events(
     return sorted(items, key=lambda x: x.get("detected_at", ""), reverse=True)
 
 # Utility to shorten resource addresses for display
-def short_resource(resource: str) -> str:
-    # Keeps only the useful part (resource name)
+def format_resource(resource: str) -> str:
+    # keep only last meaningful parts
     parts = resource.split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else resource
+    
+    if len(parts) >= 3:
+        return f"{parts[-2]}.{parts[-1]}"
+    return resource
+
+ # Utility to simplify change type display
+def format_change_type(change_type: str) -> str:
+    mapping = {
+        "update": "MODIFIED",
+        "create": "CREATED",
+        "delete": "DELETED",
+    }
+    return mapping.get(change_type.lower(), change_type.upper())
 
 def print_drift_table(events: list[dict]) -> None:
     SEVERITY_STYLES = {
@@ -72,22 +84,23 @@ def print_drift_table(events: list[dict]) -> None:
 
     table = Table(
         title=f"Drift Events ({len(events)} total)",
-        box=box.ROUNDED,
-        show_lines=True,
+        box=box.SIMPLE_HEAVY,
+        show_lines=False,
+        expand=True
     )
-    table.add_column("Detected At", style="cyan", width=22)
-    table.add_column("Severity", width=10)
+    table.add_column("Detected At", style="cyan", no_wrap=True)
+    table.add_column("Severity", width=10, no_wrap=True)
     table.add_column("Resource", overflow="fold")
-    table.add_column("Change Type", width=10)
-    table.add_column("Environment", width=12)
+    table.add_column("Change Type", overflow="fold")
+    table.add_column("Environment", width=12, no_wrap=True)
 
     for e in events:
         sev = e.get("severity", "LOW")
         table.add_row(
             e.get("detected_at", "")[:19].replace("T", " "),
             f"[{SEVERITY_STYLES.get(sev, '')}]{sev}[/]",
-            e.get("resource_address", ""),
-            short_resource(e.get("resource_address", "")),
+            format_resource(e.get("resource_address", "")),  # Resource (clean)
+            format_change_type(e.get("change_type", "")),                       # Change Type (FIXED)
             e.get("environment", ""),
         )
 
