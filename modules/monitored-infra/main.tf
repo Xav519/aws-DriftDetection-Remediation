@@ -114,3 +114,11 @@ resource "aws_iam_role_policy" "monitored_inline" {
     ]
   })
 }
+
+# Enforces that no managed policies are attached to this role.
+# Any attachment made outside Terraform (e.g. AdministratorAccess) 
+# will show up as CRITICAL drift in terraform plan.
+resource "aws_iam_role_policy_attachments_exclusive" "monitored" {
+  role_name   = aws_iam_role.monitored.name
+  policy_arns = []
+}
