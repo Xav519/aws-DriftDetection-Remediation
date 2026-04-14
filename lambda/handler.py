@@ -144,6 +144,7 @@ EXCLUDED_RESOURCES = {
     "module.drift_detection.aws_lambda_function.drift_parser",
     "module.drift_detection.aws_iam_role_policy.github_actions_permissions",
     "module.drift_detection.data.aws_iam_policy_document.github_actions_permissions",
+    "module.drift_detection.aws_iam_role_policy.github_actions_remediate",
 }
 
 def parse_plan(plan: dict) -> list[dict]:
