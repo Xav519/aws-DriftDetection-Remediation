@@ -56,6 +56,11 @@ def query_drift_events(
 
     return sorted(items, key=lambda x: x.get("detected_at", ""), reverse=True)
 
+# Utility to shorten resource addresses for display
+def short_resource(resource: str) -> str:
+    # Keeps only the useful part (resource name)
+    parts = resource.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else resource
 
 def print_drift_table(events: list[dict]) -> None:
     SEVERITY_STYLES = {
@@ -72,7 +77,7 @@ def print_drift_table(events: list[dict]) -> None:
     )
     table.add_column("Detected At", style="cyan", width=22)
     table.add_column("Severity", width=10)
-    table.add_column("Resource", width=40)
+    table.add_column("Resource", overflow="fold")
     table.add_column("Change Type", width=10)
     table.add_column("Environment", width=12)
 
@@ -82,7 +87,7 @@ def print_drift_table(events: list[dict]) -> None:
             e.get("detected_at", "")[:19].replace("T", " "),
             f"[{SEVERITY_STYLES.get(sev, '')}]{sev}[/]",
             e.get("resource_address", ""),
-            e.get("change_type", ""),
+            short_resource(e.get("resource_address", "")),
             e.get("environment", ""),
         )
 
@@ -111,18 +116,25 @@ def print_summary(events: list[dict]) -> None:
 @click.option("--days", "-d", default=7, help="Number of days to look back")
 @click.option("--severity", "-s", type=click.Choice(["CRITICAL", "HIGH", "MEDIUM", "LOW"]), help="Filter by severity")
 @click.option("--resource", "-r", default=None, help="Filter by resource type substring")
+@click.option("--limit", "-l", default=10, help="Limit number of results displayed")
+@click.option("--latest", is_flag=True, help="Show only the most recent event")
 @click.option("--export", "-e", default=None, help="Export results to JSON file")
-def main(days: int, severity: str, resource: str, export: str) -> None:
+def main(days: int, severity: str, resource: str, limit: int, latest: bool, export: str) -> None:
     """Query and display the drift event history from DynamoDB."""
     console.print(f"[dim]Querying {DRIFT_TABLE} — last {days} days[/dim]\n")
 
     events = query_drift_events(days=days, severity=severity, resource_filter=resource)
+    if latest:
+        events = events[:1]
+    else:
+        events = events[:limit]  #  LIMIT RESULTS
 
     if not events:
         console.print("[green]No drift events found for the selected filters.[/green]")
         return
 
     print_summary(events)
+    console.print(f"[dim]Showing {len(events)} most recent events[/dim]\n")
     print_drift_table(events)
 
     if export:
