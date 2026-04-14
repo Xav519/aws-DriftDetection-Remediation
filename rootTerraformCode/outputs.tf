@@ -51,5 +51,5 @@ output "alert_email" {
 
 output "monitored_iam_role_name" {
   description = "The name of the monitored IAM role"
-  value       = aws_iam_role.monitored_role.name
+  value       = module.monitored_infra.iam_role_name
 }
