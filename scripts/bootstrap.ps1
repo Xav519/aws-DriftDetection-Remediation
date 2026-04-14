@@ -17,6 +17,10 @@
 # Stop on any error — equivalent to bash's set -e
 $ErrorActionPreference = "Stop"
 
+# Get the directory of this script and the project root
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Resolve-Path "$scriptDir\.."
+
 ###############################################################################
 # Config — override these by setting env vars before running, e.g.:
 #   $env:AWS_REGION = "us-east-1"
@@ -60,7 +64,8 @@ Write-Host ""
 Write-Host "Step 1: Bootstrapping remote state infrastructure..." -ForegroundColor Cyan
 
 # Navigate into the state-backend module
-Push-Location = Join-Path $projectRoot "modules\state-backend"
+$modulePath = Join-Path $projectRoot "modules\state-backend"
+Push-Location $modulePath
 
 # Write a temporary backend_override.tf that forces a local backend.
 # Equivalent to the bash heredoc: cat > file << EOF ... EOF
@@ -113,8 +118,6 @@ Write-Host "Step 1 complete: S3 bucket and DynamoDB table created." -ForegroundC
 Write-Host ""
 Write-Host "Step 2: Updating backend config in main.tf..." -ForegroundColor Cyan
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectRoot = Resolve-Path "$scriptDir\.."
 $mainTfPath = Join-Path $projectRoot "rootTerraformCode\main.tf"
 
 if (-not (Test-Path $mainTfPath)) {
