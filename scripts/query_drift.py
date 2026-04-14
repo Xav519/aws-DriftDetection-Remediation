@@ -110,7 +110,7 @@ def print_drift_table(events: list[dict]) -> None:
 def print_summary(events: list[dict]) -> None:
     from collections import Counter
     by_severity = Counter(e.get("severity") for e in events)
-    by_type = Counter(e.get("change_type") for e in events)
+    by_type = Counter(format_change_type(e.get("change_type", "")) for e in events)
 
     console.print(Panel(
         f"[bold]Total events:[/bold] {len(events)}\n"
