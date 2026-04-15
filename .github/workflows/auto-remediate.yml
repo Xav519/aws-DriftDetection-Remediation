@@ -9,7 +9,7 @@ on:
   issues:
     # workflow starts when issue is created ✔ OR when label is added ✔ --> ignore events that are NOT auto-remediate labels
     # with guards --  Note: we rely on guard logic to filter.
-    types: [opened, labeled]
+    types: [opened, edited, labeled]
   workflow_dispatch:
     inputs:
       environment:
@@ -51,36 +51,30 @@ jobs:
         run: |
           # ── Manual trigger ───────────────────────────────────────────────
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_run=true"                        >> $GITHUB_OUTPUT
+            echo "should_run=true" >> $GITHUB_OUTPUT
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # ── Issue-label trigger ──────────────────────────────────────────
-          # Ignore ALL labeled events except auto-remediate
-          if [ "${{ github.event_name }}" = "issues" ] && \
-            [ "${{ github.event.action }}" = "labeled" ]; then
-
-            if [ "${{ github.event.label.name }}" != "auto-remediate" ]; then
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              echo "environment=dev" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          fi
-
-          # Derive environment from other labels already on the issue.
-          # drift-detection.yml must add prod/staging/dev label at issue creation.
+          # ── Get issue labels (state-based, reliable) ─────────────────────
           LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
-          if echo "$LABELS" | grep -q "^prod$"; then
-            ENV="prod"
-          elif echo "$LABELS" | grep -q "^staging$"; then
-            ENV="staging"
+
+          # ── Only run if auto-remediate label exists ──────────────────────
+          if echo "$LABELS" | grep -q "auto-remediate"; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
           else
-            ENV="dev"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "environment=dev" >> $GITHUB_OUTPUT
           fi
 
-          echo "should_run=true" >> $GITHUB_OUTPUT
-          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          # ── Derive environment (ONLY if running) ─────────────────────────
+          if echo "$LABELS" | grep -q "^prod$"; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          elif echo "$LABELS" | grep -q "^staging$"; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
 
   ###########################################################################
   # Job: Human approval gate + Terraform apply
