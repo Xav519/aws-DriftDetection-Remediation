@@ -284,42 +284,38 @@ def write_drift_events(events: list[dict]) -> int:
 
 
 def publish_alert(events: list[dict]) -> None:
-    """Publish a drift alert to SNS. One message per severity tier."""
+    """Publish ONLY CRITICAL drift alerts to SNS."""
     critical = [e for e in events if e["severity"] == "CRITICAL"]
-    others = [e for e in events if e["severity"] != "CRITICAL"]
 
-    def _publish(event_list: list[dict], subject_prefix: str) -> None:
-        if not event_list:
-            return
-        summary = {
-            "severity_summary": _count_by_severity(event_list),
-            "total_drifted_resources": len(event_list),
-            "environment": ENVIRONMENT,
-            "detected_at": datetime.now(timezone.utc).isoformat(),
-            "events": [
-                {
-                    "resource_address": e["resource_address"],
-                    "severity": e["severity"],
-                    "change_type": e["change_type"],
-                    "details": e["changed_attributes"],
-                }
-                for e in event_list[:10]
-            ],
-        }
-        sns_client.publish(
-            TopicArn=SNS_TOPIC_ARN,
-            Subject=f"[{subject_prefix}] {ENVIRONMENT.upper()} — {len(event_list)} resource(s) drifted",
-            Message=json.dumps(summary, indent=2),
-            MessageAttributes={
-                "severity": {"DataType": "String", "StringValue": subject_prefix},
-                "environment": {"DataType": "String", "StringValue": ENVIRONMENT},
-            },
-        )
+    if not critical:
+        logger.info("No CRITICAL drift — no alert sent")
+        return
 
-    if critical:
-        _publish(critical, "CRITICAL DRIFT")
-    if others:
-        _publish(others, "DRIFT DETECTED")
+    summary = {
+        "severity_summary": _count_by_severity(critical),
+        "total_drifted_resources": len(critical),
+        "environment": ENVIRONMENT,
+        "detected_at": datetime.now(timezone.utc).isoformat(),
+        "events": [
+            {
+                "resource_address": e["resource_address"],
+                "severity": e["severity"],
+                "change_type": e["change_type"],
+                "details": e["changed_attributes"],
+            }
+            for e in critical[:10]
+        ],
+    }
+
+    sns_client.publish(
+        TopicArn=SNS_TOPIC_ARN,
+        Subject=f"[CRITICAL DRIFT] {ENVIRONMENT.upper()} — {len(critical)} resource(s)",
+        Message=json.dumps(summary, indent=2),
+        MessageAttributes={
+            "severity": {"DataType": "String", "StringValue": "CRITICAL"},
+            "environment": {"DataType": "String", "StringValue": ENVIRONMENT},
+        },
+    )
 
 
 def emit_metrics(events: list[dict]) -> None:
