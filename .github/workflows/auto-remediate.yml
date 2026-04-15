@@ -9,7 +9,7 @@ on:
   issues:
     # workflow starts when issue is created ✔ OR when label is added ✔ --> ignore events that are NOT auto-remediate labels
     # with guards --  Note: we rely on guard logic to filter.
-    types: [opened, edited, labeled]
+    types: [opened, labeled]
   workflow_dispatch:
     inputs:
       environment:
