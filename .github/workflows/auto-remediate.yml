@@ -2,7 +2,6 @@
 # auto-remediate.yml
 # Triggered when a drift issue is labeled "auto-remediate" OR manually.
 # Requires human approval (GitHub Environment) before applying.
-# This gate is intentional — auto-applying deletes without review = outages.
 ###############################################################################
 name: Auto Remediate Drift
 
@@ -20,7 +19,7 @@ on:
       dry_run:
         description: "Dry run (plan only, no apply)"
         required: false
-        default: "true"
+        default: "false"          # FIX: was "true" — apply never ran by default
 
 permissions:
   contents: read
@@ -34,7 +33,8 @@ env:
 
 jobs:
   ###########################################################################
-  # Guard: only proceed if label is "auto-remediate" on a drift issue
+  # Guard: only proceed if the label "auto-remediate" was just added,
+  #        OR this is a manual workflow_dispatch.
   ###########################################################################
   guard:
     name: Check trigger conditions
@@ -42,34 +42,40 @@ jobs:
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       environment: ${{ steps.check.outputs.environment }}
+
     steps:
       - name: Check trigger
         id: check
         run: |
-          if [ "${{ github.event_name }}" == "issues" ]; then
-            LABEL="${{ github.event.label.name }}"
-            ISSUE_LABELS='${{ toJson(github.event.issue.labels.*.name) }}'
-
-            if [ "$LABEL" != "auto-remediate" ]; then
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            # Extract environment from issue labels
-            if echo "$ISSUE_LABELS" | grep -q '"prod"'; then
-              ENV="prod"
-            elif echo "$ISSUE_LABELS" | grep -q '"staging"'; then
-              ENV="staging"
-            else
-              ENV="dev"
-            fi
-
-            echo "should_run=true"  >> $GITHUB_OUTPUT
-            echo "environment=$ENV" >> $GITHUB_OUTPUT
-          else
-            echo "should_run=true"  >> $GITHUB_OUTPUT
-            echo "environment=${{ github.event.inputs.environment || 'dev' }}" >> $GITHUB_OUTPUT
+          # ── Manual trigger ───────────────────────────────────────────────
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true"                        >> $GITHUB_OUTPUT
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+            exit 0
           fi
+
+          # ── Issue-label trigger ──────────────────────────────────────────
+          # Only act when the label that was JUST added is "auto-remediate"
+          ADDED_LABEL="${{ github.event.label.name }}"
+          if [ "$ADDED_LABEL" != "auto-remediate" ]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "environment=dev"  >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Derive environment from other labels already on the issue.
+          # drift-detection.yml must add prod/staging/dev label at issue creation.
+          LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
+          if echo "$LABELS" | grep -q "^prod$"; then
+            ENV="prod"
+          elif echo "$LABELS" | grep -q "^staging$"; then
+            ENV="staging"
+          else
+            ENV="dev"
+          fi
+
+          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
 
   ###########################################################################
   # Job: Human approval gate + Terraform apply
@@ -80,31 +86,26 @@ jobs:
     if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     # GitHub Environment with required reviewers — this is the approval gate.
-    # Go to: Settings > Environments > create "remediation" environment
-    # Add yourself (or your team) as a required reviewer.
+    # Settings > Environments > "remediation" > add required reviewers.
     environment:
       name: remediation
       url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
     env:
       ENVIRONMENT: ${{ needs.guard.outputs.environment }}
 
     steps:
-      # -----------------------------------------------------------------
-      # Checkout
-      # -----------------------------------------------------------------
+      # ── Checkout ──────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -----------------------------------------------------------------
-      # Build Lambda zip from source so filebase64sha256 resolves correctly
-      # -----------------------------------------------------------------
+      # ── Build Lambda zip ──────────────────────────────────────────────────
       - name: Build Lambda zip
         run: zip -r lambda_payload.zip lambda/
 
-      # -----------------------------------------------------------------
-      # AWS Auth (OIDC)
-      # -----------------------------------------------------------------
+      # ── AWS Auth (OIDC) ───────────────────────────────────────────────────
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -112,19 +113,16 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: remediation-${{ github.run_id }}
 
-      # -----------------------------------------------------------------
-      # Terraform setup
-      # -----------------------------------------------------------------
+      # ── Terraform setup ───────────────────────────────────────────────────
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # -----------------------------------------------------------------
-      # Init
-      # -----------------------------------------------------------------
+      # ── Init ──────────────────────────────────────────────────────────────
       - name: Terraform Init
+        working-directory: rootTerraformCode
         run: |
           terraform init \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
@@ -132,38 +130,56 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
             -no-color
-        working-directory: rootTerraformCode
 
-      # -----------------------------------------------------------------
-      # Plan — always runs so the reviewer sees what will change
-      # -----------------------------------------------------------------
+      # ── Plan ──────────────────────────────────────────────────────────────
+      # FIX: capture exit code properly so a "no changes" plan (exit 0) and
+      #      a "changes needed" plan (exit 2) both proceed; only exit 1 fails.
       - name: Terraform Plan (pre-apply confirmation)
+        id: plan
+        working-directory: rootTerraformCode
         run: |
+          set +e
           terraform plan \
+            -detailed-exitcode \
             -out=remediate.tfplan \
             -no-color \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="alert_email=${{ secrets.ALERT_EMAIL }}" \
             -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL || '' }}" \
             2>&1 | tee remediate_plan.txt
-          echo "## Remediation Plan" >> $GITHUB_STEP_SUMMARY
-          cat remediate_plan.txt >> $GITHUB_STEP_SUMMARY
-        working-directory: rootTerraformCode
+          PLAN_EXIT=$?
+          set -e
 
-      # -----------------------------------------------------------------
-      # Apply — skipped if dry_run=true (default)
-      # -----------------------------------------------------------------
+          echo "plan_exit_code=$PLAN_EXIT" >> $GITHUB_OUTPUT
+
+          echo "## Remediation Plan" >> $GITHUB_STEP_SUMMARY
+          cat remediate_plan.txt    >> $GITHUB_STEP_SUMMARY
+
+          if [ $PLAN_EXIT -eq 1 ]; then
+            echo "::error::Terraform plan failed — see output above."
+            exit 1
+          fi
+          # Exit 0 = already clean, exit 2 = changes to apply — both are fine here.
+
+      # ── Decide apply vs dry-run ───────────────────────────────────────────
       - name: Decide if apply should run
         id: decision
         run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+          # workflow_dispatch: respect the dry_run input
+          # issues trigger: dry_run input is empty → default to applying
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+          if [ "$DRY_RUN" = "true" ]; then
             echo "apply=false" >> $GITHUB_OUTPUT
+            echo "Dry-run mode — skipping apply."
           else
             echo "apply=true" >> $GITHUB_OUTPUT
           fi
+
+      # ── Apply ─────────────────────────────────────────────────────────────
       - name: Terraform Apply
-        if: steps.decision.outputs.apply == 'true'
+        if: steps.decision.outputs.apply == 'true' && steps.plan.outputs.plan_exit_code == '2'
         id: apply
+        working-directory: rootTerraformCode
         run: |
           set +e
           terraform apply \
@@ -172,16 +188,25 @@ jobs:
             remediate.tfplan \
             2>&1 | tee apply_output.txt
           APPLY_EXIT=$?
-          echo "apply_exit_code=$APPLY_EXIT" >> $GITHUB_OUTPUT
-          exit $APPLY_EXIT
-        working-directory: rootTerraformCode
+          set -e
 
-      # -----------------------------------------------------------------
-      # Record remediation event in DynamoDB via Lambda
-      # Raw JSON payload — no base64 encoding
-      # -----------------------------------------------------------------
+          echo "apply_exit_code=$APPLY_EXIT" >> $GITHUB_OUTPUT
+
+          echo "## Apply Output" >> $GITHUB_STEP_SUMMARY
+          cat apply_output.txt  >> $GITHUB_STEP_SUMMARY
+
+          exit $APPLY_EXIT
+
+      # ── No-op notice when infra is already clean ──────────────────────────
+      - name: Already clean — no apply needed
+        if: steps.plan.outputs.plan_exit_code == '0'
+        run: echo "Infrastructure is already in the desired state. Nothing to apply." >> $GITHUB_STEP_SUMMARY
+
+      # ── Record remediation event in DynamoDB via Lambda ───────────────────
+      # FIX: gate on steps.apply.conclusion, not the raw exit-code output,
+      #      so this step is skipped safely when apply didn't run at all.
       - name: Record remediation in DynamoDB
-        if: steps.apply.outputs.apply_exit_code == '0'
+        if: steps.apply.conclusion == 'success'
         run: |
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           aws lambda invoke \
@@ -191,11 +216,9 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             /dev/null
 
-      # -----------------------------------------------------------------
-      # Close the drift issue and leave an audit comment
-      # -----------------------------------------------------------------
+      # ── Close issue ───────────────────────────────────────────────────────
       - name: Close drift issue
-        if: github.event_name == 'issues' && steps.apply.outputs.apply_exit_code == '0'
+        if: github.event_name == 'issues' && steps.apply.conclusion == 'success'
         uses: actions/github-script@v7
         with:
           script: |
@@ -213,9 +236,7 @@ jobs:
               labels: ['drift', 'remediated', '${{ env.ENVIRONMENT }}']
             });
 
-      # -----------------------------------------------------------------
-      # Upload plan + apply output as artifacts (90-day retention)
-      # -----------------------------------------------------------------
+      # ── Upload artifacts ──────────────────────────────────────────────────
       - name: Upload remediation artifacts
         if: always()
         uses: actions/upload-artifact@v4
