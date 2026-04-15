@@ -1,12 +1,14 @@
 ###############################################################################
 # drift-detection.yml
 # Detects Terraform drift and opens a GitHub issue for critical findings.
+# Chain: detect → open-issue (if no open drift issue exists) → label triggers
+#        auto-remediate.yml automatically via on: issues: types: [labeled]
 ###############################################################################
 name: Drift Detection
 
 on:
   schedule:
-    - cron: "0 */6 * * *"    # every 6 hours — remove if you prefer manual-only
+    - cron: "0 */6 * * *"    # Every 6 hours — the heartbeat of the system
   workflow_dispatch:
     inputs:
       environment:
@@ -23,45 +25,80 @@ permissions:
   pull-requests: write
 
 env:
-  TF_VERSION: "1.7.5"
-  AWS_REGION: "us-east-1"
-  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+  TF_VERSION:   "1.7.5"
+  AWS_REGION:   "us-east-1"
+  ENVIRONMENT:  ${{ github.event.inputs.environment || 'dev' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  ###########################################################################
+  # Ensure all required labels exist before anything tries to use them.
+  # GitHub throws 422 UnprocessableEntity if you assign a non-existent label.
+  ###########################################################################
+  bootstrap-labels:
+    name: Ensure GitHub labels exist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create labels if missing
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: 'drift',           color: 'e4e669', description: 'Infrastructure drift detected' },
+              { name: 'critical',        color: 'd73a4a', description: 'Critical severity drift' },
+              { name: 'auto-remediate',  color: '0075ca', description: 'Triggers auto-remediation workflow' },
+              { name: 'remediated',      color: '0e8a16', description: 'Drift has been remediated' },
+              { name: 'dev',             color: 'bfd4f2', description: 'Development environment' },
+              { name: 'staging',         color: 'c5def5', description: 'Staging environment' },
+              { name: 'prod',            color: 'f9d0c4', description: 'Production environment' },
+            ];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  ...label,
+                });
+                console.log(`Created label: ${label.name}`);
+              } catch (e) {
+                // 422 = label already exists — that's fine, keep going
+                if (e.status !== 422) throw e;
+              }
+            }
+
+  ###########################################################################
+  # Detect drift via Terraform plan
+  ###########################################################################
   detect:
     name: Detect Drift
+    needs: bootstrap-labels
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      drift_detected:  ${{ steps.plan.outputs.drift_detected }}
-      plan_exit_code:  ${{ steps.plan.outputs.plan_exit_code }}
-      critical_count:  ${{ steps.parse.outputs.critical_count }}
-      drift_summary:   ${{ steps.parse.outputs.drift_summary }}
+      drift_detected: ${{ steps.plan.outputs.drift_detected }}
+      plan_exit_code: ${{ steps.plan.outputs.plan_exit_code }}
+      critical_count: ${{ steps.parse.outputs.critical_count }}
+      drift_summary:  ${{ steps.parse.outputs.drift_summary }}
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build Lambda zip
         run: zip -r lambda_payload.zip lambda/
 
-      # ── AWS Auth (OIDC) ─────────────────────────────────────────────────
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region:     ${{ env.AWS_REGION }}
 
-      # ── Terraform setup ─────────────────────────────────────────────────
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # ── Init ────────────────────────────────────────────────────────────
       - name: Terraform Init
         working-directory: rootTerraformCode
         run: |
@@ -72,12 +109,10 @@ jobs:
             -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
             -no-color
 
-      # ── Validate ─────────────────────────────────────────────────────────
       - name: Terraform Validate
         working-directory: rootTerraformCode
         run: terraform validate -no-color
 
-      # ── Plan (drift detection) ───────────────────────────────────────────
       - name: Terraform Plan (drift detection)
         id: plan
         working-directory: rootTerraformCode
@@ -97,7 +132,6 @@ jobs:
 
           echo "plan_exit_code=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
 
-          # 0 = clean, 1 = error, 2 = drift detected
           if [ $PLAN_EXIT_CODE -eq 1 ]; then
             echo "drift_detected=false" >> $GITHUB_OUTPUT
             echo "::error::Terraform plan failed — see output below."
@@ -109,7 +143,6 @@ jobs:
             echo "drift_detected=false" >> $GITHUB_OUTPUT
           fi
 
-      # ── Always show plan output ──────────────────────────────────────────
       - name: Show Terraform plan output
         if: always()
         working-directory: rootTerraformCode
@@ -117,13 +150,11 @@ jobs:
           echo "===== plan_output.txt ====="
           cat plan_output.txt || echo "(file not found)"
 
-      # ── Export plan JSON ─────────────────────────────────────────────────
       - name: Export plan JSON
         if: steps.plan.outputs.plan_exit_code == '2'
         working-directory: rootTerraformCode
         run: terraform show -json tfplan > tfplan.json
 
-      # ── Invoke Lambda drift parser ───────────────────────────────────────
       - name: Parse drift and invoke Lambda
         id: parse
         if: steps.plan.outputs.plan_exit_code == '2'
@@ -149,17 +180,15 @@ jobs:
           echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
           echo "drift_summary=Drift: $DRIFT_COUNT resources, $CRITICAL_COUNT critical" >> $GITHUB_OUTPUT
 
-          echo "## Drift Detection Results"            >> $GITHUB_STEP_SUMMARY
-          echo "| Drift | Critical |"                  >> $GITHUB_STEP_SUMMARY
-          echo "|-------|----------|"                  >> $GITHUB_STEP_SUMMARY
-          echo "| $DRIFT_COUNT | $CRITICAL_COUNT |"   >> $GITHUB_STEP_SUMMARY
+          echo "## Drift Detection Results"          >> $GITHUB_STEP_SUMMARY
+          echo "| Drift | Critical |"                >> $GITHUB_STEP_SUMMARY
+          echo "|-------|----------|"                >> $GITHUB_STEP_SUMMARY
+          echo "| $DRIFT_COUNT | $CRITICAL_COUNT |" >> $GITHUB_STEP_SUMMARY
 
-      # ── Clean state summary ──────────────────────────────────────────────
       - name: No drift summary
         if: steps.plan.outputs.plan_exit_code == '0'
         run: echo "## ✅ No Drift Detected" >> $GITHUB_STEP_SUMMARY
 
-      # ── Upload plan artifacts ────────────────────────────────────────────
       - name: Upload plan artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -171,46 +200,107 @@ jobs:
           retention-days: 30
 
   ###########################################################################
-  # Open GitHub issue on critical drift
+  # Open GitHub issue on drift — with duplicate guard.
+  # If an open drift issue already exists for this environment, skip creating
+  # a new one. This prevents the 6h schedule from spamming issues and
+  # triggering repeated remediation runs before the first one completes.
   ###########################################################################
   open-issue:
-    name: Open Critical Drift Issue
+    name: Open Drift Issue
     needs: detect
     runs-on: ubuntu-latest
-    # any drift, not just critical
     if: needs.detect.outputs.drift_detected == 'true'
 
     steps:
-      - name: Create issue
+      - name: Check for existing open drift issue
+        id: check-existing
         uses: actions/github-script@v7
         env:
           ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
         with:
           script: |
             const env = process.env.ENVIRONMENT;
+
+            // Search for any open issue labelled both 'drift' and the env name.
+            // If one already exists, skip creating a duplicate.
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              state:  'open',
+              labels: `drift,${env}`,
+            });
+
+            if (issues.length > 0) {
+              console.log(`Open drift issue already exists for ${env}: #${issues[0].number} — skipping.`);
+              core.setOutput('skip', 'true');
+              core.setOutput('existing_issue', issues[0].number.toString());
+            } else {
+              core.setOutput('skip', 'false');
+            }
+
+      - name: Comment on existing issue instead of opening duplicate
+        if: steps.check-existing.outputs.skip == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: parseInt('${{ steps.check-existing.outputs.existing_issue }}'),
+              body: [
+                `🔄 **Drift still present** as of ${new Date().toISOString()}`,
+                '',
+                `**Summary:** ${{ needs.detect.outputs.drift_summary }}`,
+                `**Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+              ].join('\n'),
+            });
+
+      - name: Create new drift issue
+        id: create_issue
+        if: steps.check-existing.outputs.skip == 'false'
+        uses: actions/github-script@v7
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+        with:
+          script: |
+            const env           = process.env.ENVIRONMENT;
             const criticalCount = parseInt('${{ needs.detect.outputs.critical_count }}' || '0');
-            const emoji = criticalCount > 0 ? '🚨 CRITICAL' : '⚠️ DRIFT DETECTED';
-            const title = `${emoji} - ${env}`;
+            const emoji         = criticalCount > 0 ? '🚨 CRITICAL' : '⚠️ DRIFT DETECTED';
+            const title         = `${emoji} - ${env}`;
+
             const issue = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
               title,
               body: [
-                `Critical infrastructure drift detected in **${env}**.`,
+                `Infrastructure drift detected in **${env}**.`,
                 '',
                 `**Summary:** ${{ needs.detect.outputs.drift_summary }}`,
                 '',
                 `**Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
                 '',
-                '_Label this issue `auto-remediate` to trigger the remediation workflow, or run it manually._'
+                '---',
+                '_This issue was opened automatically. The `auto-remediate` label below',
+                'will trigger the remediation workflow momentarily._',
               ].join('\n'),
-              labels: ['drift', 'critical', env]   // <-- env label added here
+              labels: ['drift', env],
             });
+            core.setOutput("issue_number", issue.data.number);
 
-            // Auto-add the remediation label to kick off auto-remediate.yml
+            console.log(`Opened issue #${issue.data.number}: ${title}`);
+
+      - name: Wait before triggering remediation
+        if: steps.check-existing.outputs.skip == 'false'
+        run: sleep 5
+
+      - name: Add auto-remediate label (trigger)
+        if: steps.check-existing.outputs.skip == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issue.data.number,
+              issue_number: ${{ steps.create_issue.outputs.issue_number }},
               labels: ['auto-remediate']
             });
