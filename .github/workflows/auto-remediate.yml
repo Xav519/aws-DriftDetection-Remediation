@@ -7,9 +7,7 @@ name: Auto Remediate Drift
 
 on:
   issues:
-    # workflow starts when issue is created ✔ OR when label is added ✔ --> ignore events that are NOT auto-remediate labels
-    # with guards --  Note: we rely on guard logic to filter.
-    types: [opened, labeled]
+    types: [labeled]
   workflow_dispatch:
     inputs:
       environment:
@@ -51,30 +49,33 @@ jobs:
         run: |
           # ── Manual trigger ───────────────────────────────────────────────
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "should_run=true"                        >> $GITHUB_OUTPUT
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # ── Get issue labels (state-based, reliable) ─────────────────────
-          LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
-
-          # ── Only run if auto-remediate label exists ──────────────────────
-          if echo "$LABELS" | grep -q "auto-remediate"; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          else
+          # ── Issue-label trigger ──────────────────────────────────────────
+          # Only act when the label that was JUST added is "auto-remediate"
+          ADDED_LABEL="${{ github.event.label.name }}"
+          if [ "$ADDED_LABEL" != "auto-remediate" ]; then
             echo "should_run=false" >> $GITHUB_OUTPUT
-            echo "environment=dev" >> $GITHUB_OUTPUT
+            echo "environment=dev"  >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-          # ── Derive environment (ONLY if running) ─────────────────────────
+          # Derive environment from other labels already on the issue.
+          # drift-detection.yml must add prod/staging/dev label at issue creation.
+          LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
           if echo "$LABELS" | grep -q "^prod$"; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
+            ENV="prod"
           elif echo "$LABELS" | grep -q "^staging$"; then
-            echo "environment=staging" >> $GITHUB_OUTPUT
+            ENV="staging"
           else
-            echo "environment=dev" >> $GITHUB_OUTPUT
+            ENV="dev"
           fi
+
+          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
 
   ###########################################################################
   # Job: Human approval gate + Terraform apply
@@ -146,10 +147,13 @@ jobs:
             -var="alert_email=${{ secrets.ALERT_EMAIL }}" \
             -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL || '' }}" \
             2>&1 | tee remediate_plan.txt
-          PLAN_EXIT=$?
+          PLAN_EXIT=${PIPESTATUS[0]}
+
+          echo "PLAN_EXIT=$PLAN_EXIT"
+          echo "PIPESTATUS: ${PIPESTATUS[@]}"
           set -e
 
-          echo "plan_exit_code=$PLAN_EXIT" >> $GITHUB_OUTPUT
+          echo "plan_exit_code=$(echo $PLAN_EXIT | tr -d '[:space:]')" >> $GITHUB_OUTPUT
 
           echo "## Remediation Plan" >> $GITHUB_STEP_SUMMARY
           cat remediate_plan.txt    >> $GITHUB_STEP_SUMMARY
@@ -159,6 +163,11 @@ jobs:
             exit 1
           fi
           # Exit 0 = already clean, exit 2 = changes to apply — both are fine here.
+
+      # FIX: this is for debugging the gating logic in the apply step; can remove later.
+      - name: Debug plan exit code
+        run: |
+          echo "plan_exit_code='${{ steps.plan.outputs.plan_exit_code }}'"
 
       # ── Decide apply vs dry-run ───────────────────────────────────────────
       - name: Decide if apply should run
