@@ -7,7 +7,9 @@ name: Auto Remediate Drift
 
 on:
   issues:
-    types: [labeled]
+    # workflow starts when issue is created ✔ OR when label is added ✔ --> ignore events that are NOT auto-remediate labels
+    # with guards --  Note: we rely on guard logic to filter.
+    types: [opened, labeled]
   workflow_dispatch:
     inputs:
       environment:
@@ -55,12 +57,15 @@ jobs:
           fi
 
           # ── Issue-label trigger ──────────────────────────────────────────
-          # Only act when the label that was JUST added is "auto-remediate"
-          ADDED_LABEL="${{ github.event.label.name }}"
-          if [ "$ADDED_LABEL" != "auto-remediate" ]; then
-            echo "should_run=false" >> $GITHUB_OUTPUT
-            echo "environment=dev"  >> $GITHUB_OUTPUT
-            exit 0
+          # Ignore ALL labeled events except auto-remediate
+          if [ "${{ github.event_name }}" = "issues" ] && \
+            [ "${{ github.event.action }}" = "labeled" ]; then
+
+            if [ "${{ github.event.label.name }}" != "auto-remediate" ]; then
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              echo "environment=dev" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           fi
 
           # Derive environment from other labels already on the issue.
