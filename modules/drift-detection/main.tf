@@ -294,25 +294,42 @@ resource "aws_iam_role_policy" "github_actions_remediate" {
       {
         Effect = "Allow"
         Action = [
+          # These are the specific permissions needed to fix common critical drifts.
+
+          # EC2 permissions to fix security group drifts like open ports or missing rules
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSecurityGroupRules",
           "ec2:AuthorizeSecurityGroupIngress",
           "ec2:RevokeSecurityGroupIngress",
           "ec2:AuthorizeSecurityGroupEgress",
           "ec2:RevokeSecurityGroupEgress",
           "ec2:CreateSecurityGroup",
           "ec2:DeleteSecurityGroup",
+
+          # S3 permissions to fix public access, encryption, versioning, and tagging drifts
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:CreateBucket",
+          "s3:DeleteBucket",
           "s3:GetBucketTagging",
           "s3:PutBucketTagging",
-          "s3:PutBucketEncryption",
           "s3:GetEncryptionConfiguration",
-          "s3:PutEncryptionConfiguration", 
+          "s3:PutEncryptionConfiguration",
           "s3:GetBucketPublicAccessBlock",
           "s3:PutBucketPublicAccessBlock",
           "s3:GetBucketVersioning",
           "s3:PutBucketVersioning",
+
+          # IAM permissions to fix drift in roles, policies, and permissions boundaries
+          "iam:GetRole",
           "iam:UpdateAssumeRolePolicy",
+          "iam:GetRolePolicy",
           "iam:PutRolePolicy",
-          "iam:DetachRolePolicy",
-          "iam:AttachRolePolicy"
+          "iam:DeleteRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy"
         ]
         Resource = "*"
       }
