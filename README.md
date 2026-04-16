@@ -1,11 +1,10 @@
 # 🛰️ AWS Infrastructure Drift Detection & Automated Remediation
-
-> **Portfolio project** by Xavier Dupuis - Cybersecurity Engineering, École Polytechnique de Montréal
+> **Portfolio project** by Xavier Dupuis
 
 [![AWS](https://img.shields.io/badge/AWS-Cloud-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com)
 [![Terraform](https://img.shields.io/badge/Terraform-1.7.5-7B42BC?logo=terraform&logoColor=white)](https://terraform.io)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://python.org)
-[![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI%2FCD-2088FF?logo=githubactions&logoColor=white)](https://github.com/features/actions)
+[![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI%2FCD-2088FF?logo=githubactions&logoColor=github)](https://github.com/features/actions)
 
 ---
 
@@ -59,6 +58,7 @@ The entire cycle from detection to remediation can happen in under 10 minutes.
 - ✅ Built a **human-gated remediation workflow** that shows engineers exactly what will change before applying anything
 - ✅ Created a **90-day audit trail** in DynamoDB queryable by severity, resource type, and time range
 - ✅ Validated the full end-to-end flow with **4 real drift scenarios** (open firewall, changed encryption, disabled security settings, IAM privilege escalation)
+- ✅ Implemented **duplicate issue guard** - prevents repeated remediation triggers when drift persists across scheduled runs
 
 ---
 
@@ -86,6 +86,22 @@ GitHub Actions (every 6 hours + on-demand)
             ├── Applies the fix automatically after approval
             └── Closes the ticket + records remediation in audit log
 ```
+
+### Drift Issue Lifecycle
+
+```
+drift-detection.yml detects drift
+    │
+    ├── Open drift issue already exists for this env?
+    │       ├── YES → add comment "drift still present" → skip (remediation already in progress)
+    │       └── NO  → create new issue with drift/env labels
+    │                       │
+    │                       └── Add "auto-remediate" label (via PAT_TOKEN)
+    │                               │
+    │                               └── Triggers auto-remediate.yml via on: issues: [labeled]
+```
+
+> **Why a PAT for the label step?** GitHub Actions' default `GITHUB_TOKEN` cannot trigger other workflows via issue label events - it's a platform restriction to prevent accidental infinite loops. A Personal Access Token with `repo` scope bypasses this limitation, allowing the `auto-remediate` label to reliably fire the remediation workflow.
 
 ---
 
@@ -130,7 +146,7 @@ aws-DriftDetection-Remediation/
 │
 └── scripts/
     ├── simulate_drift.py           # Inject real drift for demos
-    ├── bootstrap.sh / .ps1         # Backend boostrap (cross-platform)
+    ├── bootstrap.sh / .ps1         # Backend bootstrap (cross-platform)
     ├── query_drift.py              # Query drift history from DynamoDB
     └── requirements.txt            # Python dependencies
 ```
@@ -166,7 +182,6 @@ chmod +x ./scripts/bootstrap.sh
 
 ```bash
 # Edit at minimum: alert_email
-
 # For Linux / MacOS
 cp terraform.tfvars.example terraform.tfvars
 
@@ -181,9 +196,34 @@ cd rootTerraformCode
 terraform apply -var="environment=dev" -var="alert_email=your@email.com"
 ```
 
-### Step 4 - Configure GitHub Secrets
+### Step 4 - Create a Personal Access Token (PAT)
 
-After `terraform apply`, add these to your GitHub repo (Settings → Secrets → Actions):
+The remediation trigger relies on a PAT to add the `auto-remediate` label to issues. GitHub's default `GITHUB_TOKEN` cannot fire workflow triggers from within a workflow run - a PAT with `repo` scope is required.
+
+**4a. Generate the token**
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
+2. Click **Generate new token (classic)**
+3. Set a descriptive name: e.g. `drift-detection-workflow-trigger`
+4. Set expiration to your preference (90 days recommended, renew as needed)
+5. Under **Select scopes**, check **`repo`** (full control of private repositories)
+6. Click **Generate token** and **copy the value immediately** - it won't be shown again
+
+> **Scope note:** The `repo` scope is required because the workflow needs to add labels to issues in your repository. For public repositories, `public_repo` is sufficient.
+
+**4b. Add the PAT as a repository secret**
+
+1. In your repository, go to **Settings → Secrets and variables → Actions**
+2. Click **New repository secret**
+3. Name: `PAT_TOKEN`
+4. Value: paste the token you copied above
+5. Click **Add secret**
+
+This secret is referenced in `drift-detection.yml` as `${{ secrets.PAT_TOKEN }}` in the label-adding step.
+
+### Step 5 - Configure GitHub Secrets
+
+After `terraform apply`, add these to your GitHub repo (**Settings → Secrets → Actions**):
 
 | Secret | Value |
 |--------|-------|
@@ -192,8 +232,9 @@ After `terraform apply`, add these to your GitHub repo (Settings → Secrets →
 | `TF_LOCK_TABLE` | Your DynamoDB lock table name |
 | `ALERT_EMAIL` | Your notification email |
 | `SLACK_WEBHOOK_URL` | Optional Slack webhook |
+| `PAT_TOKEN` | Personal Access Token from Step 4 |
 
-### Step 5 - Create Approval Environment
+### Step 6 - Create Approval Environment
 
 **Settings → Environments → New environment** → name it `remediation` → add yourself as required reviewer.
 
@@ -247,14 +288,16 @@ python simulate_drift.py --restore
 
 ## 🔁 Remediation Workflow
 
-### Via GitHub Issue Label (Recommended)
+### Via GitHub Issue Label (Automatic)
 
 1. Drift detected → issue `🚨 CRITICAL DRIFT - dev` opens automatically
-2. Add the label `auto-remediate` to the issue
-3. Workflow triggers and **pauses for approval**
+2. `drift-detection.yml` adds the `auto-remediate` label (via `PAT_TOKEN`)
+3. `auto-remediate.yml` triggers and **pauses for approval**
 4. Review the Terraform plan in the workflow summary
 5. Click **Approve** in the GitHub Environment gate
 6. `terraform apply` fixes all drift → issue closes with audit comment
+
+If drift is still present on a subsequent scheduled run and the issue is already open, a comment is added to the existing issue instead of opening a duplicate - preventing repeated remediation triggers while the first one is in progress.
 
 ### Manual Trigger
 
@@ -262,7 +305,7 @@ python simulate_drift.py --restore
 gh workflow run auto-remediate.yml -f environment=dev -f dry_run=false
 ```
 
-Use `dry_run=true` (default) to preview the fix without applying.
+Use `dry_run=true` to preview the fix without applying.
 
 ---
 
@@ -292,31 +335,28 @@ GitHub Actions authenticates to AWS via **OIDC federation** - short-lived tokens
 
 Automated remediation of a `delete` change on a production resource can cause an outage. The gate is intentional - the system is designed to **detect fast, remediate carefully**. An engineer always sees exactly what will change before it happens.
 
+### PAT Token Scoped to Workflow Triggering Only
+
+The `PAT_TOKEN` secret is used in exactly one place: adding the `auto-remediate` label to a newly created drift issue. It is not used for any other GitHub API operation. The `repo` scope is the minimum required for label management on private repositories.
+
 ### DynamoDB as Audit Log
 
 Every drift event is stored with full before/after diffs, severity classification, timestamps, and a 90-day TTL. The table has a Global Secondary Index on severity for fast queries across environments. This supports compliance reporting independently of application logs.
 
-### `ignore_changes` on Two Internal Resources
+### Duplicate Issue Guard
+
+The detection workflow checks for an existing open drift issue before creating a new one. If one already exists, it comments on it rather than opening a duplicate. This prevents the 6-hour schedule from spawning multiple concurrent remediation runs for the same drift event.
+
+### \"ignore_changes\" on Four Internal Resources
 
 Two resources use `lifecycle { ignore_changes = [...] }`:
 
 - **Lambda zip hash** - Windows and Linux zip tools produce different binary outputs from identical source code. The Lambda code is identical; only zip metadata differs. This is a cross-platform tooling artifact, not real drift.
-- **GitHub Actions IAM policy** - AWS stores IAM policy action arrays in a different order than Terraform's JSON serializer produces. Effective permissions are identical; only serialization order differs.
+- **`github_actions_permissions` IAM role policy** - AWS stores policy action arrays in a different order than Terraform's JSON serializer produces. Effective permissions are identical; only serialization order differs.
+- **`github_actions_permissions` policy document (data source)** - Same serialization mismatch as above; the data source used to generate the policy triggers spurious drift for the same reason.
+- **`github_actions_remediate` IAM role policy** - Identical serialization issue on the remediation role's policy.
 
-Both exclusions apply only to the drift-detection system's own resources. All monitored target infrastructure has zero exclusions.
-
----
-
-## 💰 Cost Estimate (dev environment, ~$3–5/month)
-
-| Service | Usage | Cost |
-|---------|-------|------|
-| Lambda | 4 invocations/day × 300s max | ~$0.00 (free tier) |
-| DynamoDB | On-demand, ~100 events/month | ~$0.01 |
-| S3 | State file + plan artifacts | ~$0.01 |
-| SNS | ~120 notifications/month | ~$0.00 |
-| CloudWatch | 5 custom metrics + dashboard | ~$3.00 |
-| EventBridge | Scheduled trigger | ~$0.00 |
+All four exclusions apply only to the drift-detection system's own internal resources. All monitored target infrastructure has zero exclusions.
 
 ---
 
@@ -329,15 +369,15 @@ Both exclusions apply only to the drift-detection system's own resources. All mo
 | CI/CD | GitHub Actions with OIDC, environment gates, workflow outputs |
 | Runtime | Python 3.12 on AWS Lambda |
 | State Management | S3 remote backend + DynamoDB locking |
-| Security | OIDC federation, least-privilege IAM, encrypted state |
+| Security | OIDC federation, least-privilege IAM, encrypted state, PAT-scoped workflow triggers |
 
 ---
 
 ## 👤 Author
 
 **Xavier Dupuis**  
-Cybersecurity Engineering - École Polytechnique de Montréal (graduating 2026)  
-Cybersecurity Advisor - Banque Nationale du Canada
+Cybersecurity Advisor - Banque Nationale du Canada  
+B.Eng. Cybersecurity Engineering - École Polytechnique de Montréal (Graduating 2026)  
 
 **Certifications:** AWS Security Specialty · AWS Solutions Architect Associate · AWS Cloud Practitioner · CompTIA Security+ · CompTIA Network+
 
@@ -345,4 +385,7 @@ Cybersecurity Advisor - Banque Nationale du Canada
 
 ---
 
-*Part of a themed portfolio around cloud security automation. Built to production standards, not demo standards.*
+<p align="center">
+  <b>Let's build something secure.</b><br>
+  <a href="https://www.linkedin.com/in/xavierdupuis/">LinkedIn</a>
+</p>
