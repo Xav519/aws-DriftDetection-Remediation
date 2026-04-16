@@ -7,8 +7,8 @@
 name: Drift Detection
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"    # Every 6 hours — the heartbeat of the system
+#  schedule:
+#    - cron: "0 */6 * * *"    # Every 6 hours — the heartbeat of the system / Enable if needed(remove comment #)
   workflow_dispatch:
     inputs:
       environment:
