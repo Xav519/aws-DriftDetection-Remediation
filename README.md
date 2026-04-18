@@ -1,4 +1,4 @@
-# 🛰️ AWS Infrastructure Drift Detection & Automated Remediation
+# AWS Infrastructure Drift Detection & Automated Remediation
 > **Portfolio project** by Xavier Dupuis
 
 [![AWS](https://img.shields.io/badge/AWS-Cloud-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com)
